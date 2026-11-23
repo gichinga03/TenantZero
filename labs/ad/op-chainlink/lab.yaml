@@ -1,0 +1,171 @@
+id: op-chainlink
+name: "Operation Chainlink"
+description: "Intermediate AD red team lab — GenericWrite → targeted Kerberoast → WriteDACL → DCSync. Meridian Financial Group, single forest."
+
+domains:
+  - name: meridian.local
+    netbios: MERIDIAN
+    dc: DC01.meridian.local
+    functional_level: "2016"
+
+    users:
+      - username: jsmith
+        password: "Welcome1"
+        enabled: true
+        groups: [Domain Users, IT-Helpdesk]
+        description: "Helpdesk analyst"
+
+      - username: svc_backup
+        password: "Backup2019!"
+        enabled: true
+        groups: [Domain Users]
+        spns: ["BackupSvc/SRV01.meridian.local"]
+        description: "Automated backup service"
+
+      - username: svc_sql
+        password: "SqlServer2020!"
+        enabled: true
+        groups: [Domain Users]
+        spns: ["MSSQLSvc/SRV02.meridian.local:1433"]
+        description: "SQL Server service account"
+
+      - username: awalker
+        password: "Autumn2024!"
+        enabled: true
+        groups: [Domain Users, IT-Admins]
+        description: "Senior IT administrator"
+
+      - username: mthompson
+        password: "P@ssw0rd123"
+        enabled: true
+        groups: [Domain Users, Finance]
+        description: "Finance analyst"
+
+      - username: brajesh
+        password: "Summer2023!"
+        enabled: true
+        groups: [Domain Users, IT-Helpdesk]
+        description: "Helpdesk technician"
+
+      - username: l.anderson
+        password: "Meridian1!"
+        enabled: true
+        groups: [Domain Users, Domain Admins]
+        description: "Domain Administrator"
+
+      - username: Administrator
+        password: "M3r1d14n@dmin!"
+        enabled: true
+        groups: [Domain Users, Domain Admins]
+        description: "Built-in administrator"
+
+      - username: krbtgt
+        password: ""
+        enabled: false
+        groups: [Domain Users]
+        description: "Key Distribution Center service account"
+
+    groups:
+      - name: Domain Users
+        members: [jsmith, svc_backup, svc_sql, awalker, mthompson, brajesh, l.anderson, Administrator, krbtgt]
+      - name: Domain Admins
+        members: [l.anderson, Administrator]
+      - name: IT-Helpdesk
+        members: [jsmith, brajesh]
+      - name: IT-Admins
+        members: [awalker]
+      - name: Finance
+        members: [mthompson]
+
+    computers:
+      - hostname: WS01
+        ip: "10.10.10.10"
+        os: "Windows 10"
+        role: MemberServer
+        local_admins: [jsmith]
+
+      - hostname: SRV01
+        ip: "10.10.10.20"
+        os: "Windows Server 2019"
+        role: MemberServer
+        local_admins: [svc_backup]
+
+      - hostname: SRV02
+        ip: "10.10.20.10"
+        os: "Windows Server 2019"
+        role: MemberServer
+        local_admins: [svc_sql]
+
+      - hostname: DC01
+        ip: "10.10.10.1"
+        os: "Windows Server 2019"
+        role: DomainController
+        local_admins: []
+
+    acls:
+      - from: jsmith
+        to: svc_backup
+        right: GenericWrite
+
+      - from: awalker
+        to: meridian.local
+        right: WriteDACL
+
+    trusts: []
+    cert_templates: []
+    delegations: []
+
+file_system:
+  "C:\\": [tools, Windows, Users]
+  "C:\\tools": [Rubeus.exe, SharpHound.exe, PowerView.ps1, mimikatz.exe]
+  "C:\\Users\\jsmith\\Desktop": [note.txt]
+
+file_contents:
+  "C:\\Users\\jsmith\\Desktop\\note.txt": "Remember to check backup service account — credentials in IT wiki"
+
+tools:
+  available: [Rubeus.exe, SharpHound.exe, PowerView.ps1, mimikatz.exe, crackmapexec, nmap]
+  overrides: {}
+
+win_conditions:
+  - type: command_executed
+    value: "Get-DomainUser -SPN"
+    label: "Enumerated Kerberoastable accounts"
+
+  - type: loot_check
+    value: "spn_hashes.svc_backup"
+    label: "Kerberoasted svc_backup"
+
+  - type: loot_check
+    value: "ntlm_hashes.krbtgt"
+    label: "DCSync — krbtgt hash obtained"
+
+  - type: state_check
+    value: "user == l.anderson"
+    label: "Obtained Domain Admin session (l.anderson)"
+
+  - type: state_check
+    value: "user == administrator"
+    label: "Obtained Domain Admin session (Administrator)"
+
+  - type: command_executed
+    value: "mimikatz # lsadump::dcsync /user:administrator"
+    label: "DCSync complete"
+
+time:
+  session_timeout: 7200
+  token_ttl: 3600
+  mfa_prompt_after: 0
+
+hints:
+  - min_elapsed_minutes: 15
+    text: "Enumerate ACLs — look for non-default rights on service accounts"
+  - min_elapsed_minutes: 30
+    text: "GenericWrite on a service account with an SPN enables targeted Kerberoasting"
+  - min_elapsed_minutes: 60
+    text: "Find who has WriteDACL on the domain object — that right can be used to grant yourself DCSync"
+
+starting_point:
+  machine: ""
+  user: ""
+  privilege: ""

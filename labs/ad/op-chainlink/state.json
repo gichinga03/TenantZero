@@ -1,0 +1,23 @@
+{
+  "id": "op-chainlink",
+  "lab_id": "op-chainlink",
+  "user": "",
+  "hostname": "",
+  "cwd": "C:\\",
+  "loot": {
+    "ntlm_hashes": {},
+    "spn_hashes": null,
+    "plaintext_creds": {},
+    "ntds_dump": null,
+    "pfx_certs": {},
+    "arbitrary": null
+  },
+  "tickets": [],
+  "tokens": [],
+  "completed_objectives": [],
+  "used_hints": null,
+  "journal": [],
+  "started_at": "2026-11-23T09:54:25.073893575Z",
+  "last_active": "0001-01-01T00:00:00Z",
+  "mode": ""
+}

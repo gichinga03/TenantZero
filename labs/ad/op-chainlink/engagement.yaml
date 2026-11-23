@@ -1,0 +1,40 @@
+lab_id: op-chainlink
+client:
+  name: "Meridian Financial Group"
+  industry: "Financial Services"
+  fictional: true
+engagement:
+  type: "Internal Red Team Assessment"
+  mode: full-chain
+  estimated_duration: "2 hours"
+  window:
+    start: "2026-11-24 09:00"
+    end: "2026-11-24 17:00"
+scope:
+  in_scope:
+    - "meridian.local (entire domain)"
+    - "10.10.10.0/24"
+    - "10.10.20.0/24"
+  out_of_scope:
+    - "hr.meridian.local"
+    - "10.10.30.0/24 (production payment systems)"
+rules_of_engagement:
+  rules:
+    - "No destructive actions — simulation only"
+    - "Exfiltration simulation permitted, no real data transfer"
+    - "Social engineering is in scope — phishing simulation permitted"
+    - "Do not target out-of-scope systems under any circumstance"
+    - "Report all critical findings immediately via secure channel"
+  emergency_contacts:
+    - name: "James Oduya"
+      role: "CISO"
+      email: "j.oduya@meridian.local"
+      phone: "+1-555-0147"
+    - name: "Sarah Chen"
+      role: "Red Team Coordinator"
+      email: "s.chen@meridian.local"
+      phone: "+1-555-0183"
+starting_point:
+  machine: ""
+  user: ""
+  privilege: ""

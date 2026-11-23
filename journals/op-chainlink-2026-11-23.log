@@ -1,0 +1,42 @@
+{"sequence":1,"input":"ls","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:35:57.441346476+03:00"}
+{"sequence":2,"input":"whoami","output":"'whoami' is not recognized as an internal or external command, operable program or batch file.","machine":"","username":"","timestamp":"2026-11-23T12:36:20.713736719+03:00"}
+{"sequence":3,"input":"hostname","output":"'hostname' is not recognized as an internal or external command, operable program or batch file.","machine":"","username":"","timestamp":"2026-11-23T12:36:27.060390076+03:00"}
+{"sequence":4,"input":"ipconfig","output":"'ipconfig' is not recognized as an internal or external command, operable program or batch file.","machine":"","username":"","timestamp":"2026-11-23T12:36:32.648282454+03:00"}
+{"sequence":5,"input":"ls","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:38:51.968666105+03:00"}
+{"sequence":6,"input":"whoami","output":"'whoami' is not recognized as an internal or external command, operable program or batch file.","machine":"","username":"","timestamp":"2026-11-23T12:38:56.185751002+03:00"}
+{"sequence":7,"input":"ls","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:39:09.894673084+03:00"}
+{"sequence":8,"input":"ls","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:39:11.406000657+03:00"}
+{"sequence":9,"input":"exir","output":"'exir' is not recognized as an internal or external command, operable program or batch file.","machine":"","username":"","timestamp":"2026-11-23T12:39:14.314692035+03:00"}
+{"sequence":10,"input":"ls","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:39:56.649194846+03:00"}
+{"sequence":11,"input":"ls","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:39:59.528800358+03:00"}
+{"sequence":12,"input":"whoami","output":"'whoami' is not recognized as an internal or external command, operable program or batch file.","machine":"","username":"","timestamp":"2026-11-23T12:40:02.501191963+03:00"}
+{"sequence":13,"input":"ls","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:42:03.677183911+03:00"}
+{"sequence":14,"input":"exi","output":"'exi' is not recognized as an internal or external command, operable program or batch file.","machine":"","username":"","timestamp":"2026-11-23T12:42:06.50194426+03:00"}
+{"sequence":15,"input":"whoami","output":"MERIDIAN\\","machine":"","username":"","timestamp":"2026-11-23T12:42:11.043932674+03:00"}
+{"sequence":16,"input":"ls","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:42:13.524162429+03:00"}
+{"sequence":17,"input":"cd meridian","output":"","machine":"","username":"","timestamp":"2026-11-23T12:42:19.794453003+03:00"}
+{"sequence":18,"input":"dir","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:42:23.842313491+03:00"}
+{"sequence":19,"input":"ls","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:42:25.233408331+03:00"}
+{"sequence":20,"input":"ls","output":"The system cannot find the path specified.","machine":"","username":"","timestamp":"2026-11-23T12:44:00.40623818+03:00"}
+{"sequence":21,"input":"whoami","output":"MERIDIAN\\","machine":"","username":"","timestamp":"2026-11-23T12:44:04.505368856+03:00"}
+{"sequence":22,"input":"ls","output":"DEBUG: looking for \"~\" in 3 keys: [c:\\ c:\\tools c:\\users\\jsmith\\desktop]","machine":"","username":"","timestamp":"2026-11-23T12:44:30.302042252+03:00"}
+{"sequence":23,"input":"exi","output":"'exi' is not recognized as an internal or external command, operable program or batch file.","machine":"","username":"","timestamp":"2026-11-23T12:44:45.059462422+03:00"}
+{"sequence":24,"input":"ls","output":"DEBUG: looking for \"~\" in 3 keys: [c:\\users\\jsmith\\desktop c:\\ c:\\tools]","machine":"","username":"","timestamp":"2026-11-23T12:45:50.388292276+03:00"}
+{"sequence":25,"input":"whoami","output":"MERIDIAN\\","machine":"","username":"","timestamp":"2026-11-23T12:45:55.036919505+03:00"}
+{"sequence":26,"input":"cd tools","output":"","machine":"","username":"","timestamp":"2026-11-23T12:46:00.16208586+03:00"}
+{"sequence":27,"input":"PowerView.ps1","output":"The term 'powerview.ps1' is not recognized as the name of a cmdlet, function, script file, or operable program.","machine":"","username":"","timestamp":"2026-11-23T12:46:22.783495028+03:00"}
+{"sequence":28,"input":"Get-DomainUser -SPN","output":"'get-domainuser' is not recognized as an internal or external command, operable program or batch file.","machine":"","username":"","timestamp":"2026-11-23T12:46:43.878310993+03:00"}
+{"sequence":29,"input":"EXIT","output":"Session ended by user.","machine":"","username":"","timestamp":"2026-11-23T12:46:58.026370793+03:00"}
+{"sequence":30,"input":"ls","output":"DEBUG: looking for \"~\" in 3 keys: [c:\\users\\jsmith\\desktop c:\\ c:\\tools]","machine":"","username":"","timestamp":"2026-11-23T12:47:15.768583319+03:00"}
+{"sequence":31,"input":"exir","output":"'exir' is not recognized as an internal or external command, operable program or batch file.","machine":"","username":"","timestamp":"2026-11-23T12:47:25.487999632+03:00"}
+{"sequence":32,"input":"ls","output":"DEBUG: looking for \"~\" in 3 keys: [c:\\users\\jsmith\\desktop c:\\ c:\\tools]","machine":"","username":"","timestamp":"2026-11-23T12:48:06.387037182+03:00"}
+{"sequence":33,"input":"ls","output":" Volume in drive C has no label.\n Directory of C:\\\n\n01/22/2024  08:00 AM    \u003cDIR\u003e          tools\n06/19/2024  08:00 AM             1,792 Users\n01/28/2024  08:00 AM             3,584 Windows\n\n               2 File(s)\n               3 Dir(s)\n","machine":"","username":"","timestamp":"2026-11-23T12:48:20.705004109+03:00"}
+{"sequence":34,"input":"cd tools","output":"","machine":"","username":"","timestamp":"2026-11-23T12:48:25.737393606+03:00"}
+{"sequence":35,"input":"ls","output":" Volume in drive C has no label.\n Directory of C:\\\n\n01/22/2024  08:00 AM    \u003cDIR\u003e          tools\n06/19/2024  08:00 AM             1,792 Users\n01/28/2024  08:00 AM             3,584 Windows\n\n               2 File(s)\n               3 Dir(s)\n","machine":"","username":"","timestamp":"2026-11-23T12:48:26.736760882+03:00"}
+{"sequence":36,"input":"cd users","output":"","machine":"","username":"","timestamp":"2026-11-23T12:48:37.806956772+03:00"}
+{"sequence":37,"input":"ls","output":" Volume in drive C has no label.\n Directory of C:\\\n\n01/22/2024  08:00 AM    \u003cDIR\u003e          tools\n06/19/2024  08:00 AM             1,792 Users\n01/28/2024  08:00 AM             3,584 Windows\n\n               2 File(s)\n               3 Dir(s)\n","machine":"","username":"","timestamp":"2026-11-23T12:48:38.551102575+03:00"}
+{"sequence":38,"input":"ls","output":" Volume in drive C has no label.\n Directory of C:\\\n\n01/22/2024  08:00 AM    \u003cDIR\u003e          tools\n06/19/2024  08:00 AM             1,792 Users\n01/28/2024  08:00 AM             3,584 Windows\n\n               2 File(s)\n               3 Dir(s)\n","machine":"","username":"","timestamp":"2026-11-23T12:54:26.604112546+03:00"}
+{"sequence":39,"input":"cd tool","output":"","machine":"","username":"","timestamp":"2026-11-23T12:54:28.731026763+03:00"}
+{"sequence":40,"input":"ls","output":" Volume in drive C has no label.\n Directory of C:\\\n\n01/22/2024  08:00 AM    \u003cDIR\u003e          tools\n06/19/2024  08:00 AM             1,792 Users\n01/28/2024  08:00 AM             3,584 Windows\n\n               2 File(s)\n               3 Dir(s)\n","machine":"","username":"","timestamp":"2026-11-23T12:54:30.395966976+03:00"}
+{"sequence":41,"input":"cd tools","output":"","machine":"","username":"","timestamp":"2026-11-23T12:54:33.534317695+03:00"}
+{"sequence":42,"input":"ls","output":" Volume in drive C has no label.\n Directory of C:\\\n\n01/22/2024  08:00 AM    \u003cDIR\u003e          tools\n06/19/2024  08:00 AM             1,792 Users\n01/28/2024  08:00 AM             3,584 Windows\n\n               2 File(s)\n               3 Dir(s)\n","machine":"","username":"","timestamp":"2026-11-23T12:54:34.573771798+03:00"}
