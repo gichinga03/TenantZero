@@ -265,6 +265,8 @@ func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
 		path := ""
 		if len(cmd.Args) > 0 {
 			path = cmd.Args[0]
+		} else if cmd.Subcommand != "" {
+			path = cmd.Subcommand
 		} else if p, ok := cmd.Flags["path"]; ok {
 			path = p
 		}
@@ -283,6 +285,8 @@ func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
 		path := s.State.CWD
 		if len(cmd.Args) > 0 {
 			path = cmd.Args[0]
+		} else if cmd.Subcommand != "" {
+			path = cmd.Subcommand
 		}
 		return schema.ToolResult{Output: fs.Ls(path)}
 
@@ -290,6 +294,8 @@ func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
 		path := ""
 		if len(cmd.Args) > 0 {
 			path = cmd.Args[0]
+		} else if cmd.Subcommand != "" {
+			path = cmd.Subcommand
 		}
 		return schema.ToolResult{Output: fs.Cat(path)}
 

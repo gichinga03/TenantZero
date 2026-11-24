@@ -67,15 +67,16 @@ func normalize(s string) string {
 
 // GetUsers returns all users in the lab domain.
 func (p *ADProvider) GetUsers() []schema.User {
-	out := make([]schema.User, len(p.lab.Users))
-	copy(out, p.lab.Users)
+	users := p.domainUsers()
+	out := make([]schema.User, len(users))
+	copy(out, users)
 	return out
 }
 
 // GetUser returns the user whose Username matches username (case-insensitive).
 func (p *ADProvider) GetUser(username string) (schema.User, bool) {
 	key := normalize(username)
-	for _, u := range p.lab.Users {
+	for _, u := range p.domainUsers() {
 		if normalize(u.Username) == key {
 			return u, true
 		}
@@ -87,7 +88,7 @@ func (p *ADProvider) GetUser(username string) (schema.User, bool) {
 // These are candidates for Kerberoasting via Rubeus or Impacket GetUserSPNs.
 func (p *ADProvider) GetUsersWithSPN() []schema.User {
 	var out []schema.User
-	for _, u := range p.lab.Users {
+	for _, u := range p.domainUsers() {
 		if len(u.SPN) > 0 {
 			out = append(out, u)
 		}
@@ -99,7 +100,7 @@ func (p *ADProvider) GetUsersWithSPN() []schema.User {
 // Mirrors the adminCount attribute set by SDProp on privileged accounts.
 func (p *ADProvider) GetUsersWithAdminCount() []schema.User {
 	var out []schema.User
-	for _, u := range p.lab.Users {
+	for _, u := range p.domainUsers() {
 		if u.AdminCount > 0 {
 			out = append(out, u)
 		}
@@ -113,7 +114,7 @@ func (p *ADProvider) GetUsersWithAdminCount() []schema.User {
 func (p *ADProvider) GetUserGroups(username string) []schema.Group {
 	key := normalize(username)
 	var out []schema.Group
-	for _, g := range p.lab.Groups {
+	for _, g := range p.domainGroups() {
 		for _, m := range g.Members {
 			if normalize(m) == key {
 				out = append(out, g)
@@ -130,15 +131,16 @@ func (p *ADProvider) GetUserGroups(username string) []schema.Group {
 
 // GetGroups returns all domain groups.
 func (p *ADProvider) GetGroups() []schema.Group {
-	out := make([]schema.Group, len(p.lab.Groups))
-	copy(out, p.lab.Groups)
+	groups := p.domainGroups()
+	out := make([]schema.Group, len(groups))
+	copy(out, groups)
 	return out
 }
 
 // GetGroup returns the group matching name (case-insensitive).
 func (p *ADProvider) GetGroup(name string) (schema.Group, bool) {
 	key := normalize(name)
-	for _, g := range p.lab.Groups {
+	for _, g := range p.domainGroups() {
 		if normalize(g.Name) == key {
 			return g, true
 		}
@@ -162,7 +164,7 @@ func (p *ADProvider) GetGroupMembers(name string) []schema.User {
 	}
 
 	var out []schema.User
-	for _, u := range p.lab.Users {
+	for _, u := range p.domainUsers() {
 		if memberSet[normalize(u.Username)] {
 			out = append(out, u)
 		}
@@ -176,15 +178,16 @@ func (p *ADProvider) GetGroupMembers(name string) []schema.User {
 
 // GetComputers returns all computers in the domain.
 func (p *ADProvider) GetComputers() []schema.Computer {
-	out := make([]schema.Computer, len(p.lab.Computers))
-	copy(out, p.lab.Computers)
+	computers := p.domainComputers()
+	out := make([]schema.Computer, len(computers))
+	copy(out, computers)
 	return out
 }
 
 // GetComputer returns the computer matching hostname (case-insensitive).
 func (p *ADProvider) GetComputer(hostname string) (schema.Computer, bool) {
 	key := normalize(hostname)
-	for _, c := range p.lab.Computers {
+	for _, c := range p.domainComputers() {
 		if normalize(c.Hostname) == key {
 			return c, true
 		}
@@ -195,7 +198,7 @@ func (p *ADProvider) GetComputer(hostname string) (schema.Computer, bool) {
 // GetDomainControllers returns all computers where IsDC is true.
 func (p *ADProvider) GetDomainControllers() []schema.Computer {
 	var out []schema.Computer
-	for _, c := range p.lab.Computers {
+	for _, c := range p.domainComputers() {
 		for _, r := range c.Roles {
 			if strings.EqualFold(r, "DomainController") {
 				out = append(out, c)
@@ -224,8 +227,9 @@ func (p *ADProvider) GetLocalAdmins(hostname string) []string {
 
 // GetACLs returns all ACL entries in the lab.
 func (p *ADProvider) GetACLs() []schema.ACL {
-	out := make([]schema.ACL, len(p.lab.ACLs))
-	copy(out, p.lab.ACLs)
+	acls := p.domainACLs()
+	out := make([]schema.ACL, len(acls))
+	copy(out, acls)
 	return out
 }
 
@@ -234,7 +238,7 @@ func (p *ADProvider) GetACLs() []schema.ACL {
 func (p *ADProvider) GetACLsFor(target string) []schema.ACL {
 	key := normalize(target)
 	var out []schema.ACL
-	for _, a := range p.lab.ACLs {
+	for _, a := range p.domainACLs() {
 		if normalize(a.To) == key {
 			out = append(out, a)
 		}
@@ -247,7 +251,7 @@ func (p *ADProvider) GetACLsFor(target string) []schema.ACL {
 func (p *ADProvider) GetACLsFrom(principal string) []schema.ACL {
 	key := normalize(principal)
 	var out []schema.ACL
-	for _, a := range p.lab.ACLs {
+	for _, a := range p.domainACLs() {
 		if normalize(a.From) == key {
 			out = append(out, a)
 		}
@@ -263,7 +267,7 @@ func (p *ADProvider) GetACLsFrom(principal string) []schema.ACL {
 // rather than AD DACL right strings.
 func (p *ADProvider) GetAbusableACLs() []schema.ACL {
 	var out []schema.ACL
-	for _, a := range p.lab.ACLs {
+	for _, a := range p.domainACLs() {
 		if abusableRights[a.Right] {
 			out = append(out, a)
 		}
@@ -277,8 +281,9 @@ func (p *ADProvider) GetAbusableACLs() []schema.ACL {
 
 // GetTrusts returns all trust relationships defined in the lab.
 func (p *ADProvider) GetTrusts() []schema.Trust {
-	out := make([]schema.Trust, len(p.lab.Trusts))
-	copy(out, p.lab.Trusts)
+	trusts := p.domainTrusts()
+	out := make([]schema.Trust, len(trusts))
+	copy(out, trusts)
 	return out
 }
 
@@ -300,7 +305,7 @@ func (p *ADProvider) GetDelegations() []schema.Delegation {
 func (p *ADProvider) GetUnconstrainedDelegation() []schema.Computer {
 	var out []schema.Computer
 	dcSet := make(map[string]bool)
-	for _, c := range p.lab.Computers {
+	for _, c := range p.domainComputers() {
 		for _, r := range c.Roles {
 			if strings.EqualFold(r, "DomainController") {
 				dcSet[c.Hostname] = true
@@ -309,7 +314,7 @@ func (p *ADProvider) GetUnconstrainedDelegation() []schema.Computer {
 	}
 	for _, d := range p.lab.Delegations {
 		if strings.EqualFold(d.Type, "unconstrained") {
-			for _, c := range p.lab.Computers {
+			for _, c := range p.domainComputers() {
 				if strings.EqualFold(c.Hostname, d.Computer) && !dcSet[c.Hostname] {
 					out = append(out, c)
 				}
@@ -339,8 +344,9 @@ func (p *ADProvider) GetConstrainedDelegation() []schema.Delegation {
 
 // GetCertTemplates returns all certificate templates defined in the lab.
 func (p *ADProvider) GetCertTemplates() []schema.CertTemplate {
-	out := make([]schema.CertTemplate, len(p.lab.CertTemplates))
-	copy(out, p.lab.CertTemplates)
+	templates := p.domainCertTemplates()
+	out := make([]schema.CertTemplate, len(templates))
+	copy(out, templates)
 	return out
 }
 
@@ -351,7 +357,7 @@ func (p *ADProvider) GetCertTemplates() []schema.CertTemplate {
 // and app registration credential policies rather than ADCS templates.
 func (p *ADProvider) GetVulnerableCertTemplates() []schema.CertTemplate {
 	var out []schema.CertTemplate
-	for _, ct := range p.lab.CertTemplates {
+	for _, ct := range p.domainCertTemplates() {
 		if ct.ESC1 || ct.ESC2 || ct.ESC3 || ct.ESC4 ||
 			ct.ESC5 || ct.ESC6 || ct.ESC7 || ct.ESC8 {
 			out = append(out, ct)
@@ -382,7 +388,7 @@ func (p *ADProvider) ValidateCredentials(username, password string) bool {
 	key := normalize(username)
 
 	// Check lab-defined users first.
-	for _, u := range p.lab.Users {
+	for _, u := range p.domainUsers() {
 		if normalize(u.Username) == key && u.Password == password {
 			return true
 		}
@@ -510,7 +516,7 @@ func (p *ADProvider) HasReplicationRights(username string) bool {
 	userKey := normalize(username)
 	domainKey := normalize(p.lab.Domains[0].Name)
 
-	for _, a := range p.lab.ACLs {
+	for _, a := range p.domainACLs() {
 		if normalize(a.From) != userKey {
 			continue
 		}
@@ -536,7 +542,7 @@ func (p *ADProvider) DomainName() string {
 // DomainController returns the hostname of the first DC found in the computer
 // list. Returns an empty string if no DC is defined in the lab (invalid YAML).
 func (p *ADProvider) DomainController() string {
-	for _, c := range p.lab.Computers {
+	for _, c := range p.domainComputers() {
 		for _, r := range c.Roles {
 			if strings.EqualFold(r, "DomainController") {
 				return c.Hostname
@@ -544,4 +550,56 @@ func (p *ADProvider) DomainController() string {
 		}
 	}
 	return ""
+}
+// =============================================================================
+// Domain data helpers — read from domains[0] where data is nested in YAML
+// =============================================================================
+
+func (p *ADProvider) domain() *schema.Domain {
+	if len(p.lab.Domains) == 0 {
+		return &schema.Domain{}
+	}
+	return &p.lab.Domains[0]
+}
+
+func (p *ADProvider) domainUsers() []schema.User {
+	if len(p.lab.Users) > 0 {
+		return p.lab.Users
+	}
+	return p.domain().Users
+}
+
+func (p *ADProvider) domainGroups() []schema.Group {
+	if len(p.lab.Groups) > 0 {
+		return p.lab.Groups
+	}
+	return p.domain().Groups
+}
+
+func (p *ADProvider) domainComputers() []schema.Computer {
+	if len(p.lab.Computers) > 0 {
+		return p.lab.Computers
+	}
+	return p.domain().Computers
+}
+
+func (p *ADProvider) domainACLs() []schema.ACL {
+	if len(p.lab.ACLs) > 0 {
+		return p.lab.ACLs
+	}
+	return p.domain().ACLs
+}
+
+func (p *ADProvider) domainTrusts() []schema.Trust {
+	if len(p.lab.Trusts) > 0 {
+		return p.lab.Trusts
+	}
+	return p.domain().Trusts
+}
+
+func (p *ADProvider) domainCertTemplates() []schema.CertTemplate {
+	if len(p.lab.CertTemplates) > 0 {
+		return p.lab.CertTemplates
+	}
+	return p.domain().CertTemplates
 }

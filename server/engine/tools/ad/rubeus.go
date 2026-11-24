@@ -64,11 +64,15 @@ func (r *Rubeus) Execute(
 	state *schema.SessionState,
 	provider providers.Provider,
 ) schema.ToolResult {
-	if len(cmd.Args) == 0 {
+	// Subcommand arrives as cmd.Subcommand (parser eats the first non-flag
+	// token into Subcommand). Fall back to cmd.Args[0] for forward compat.
+	sub := strings.ToLower(cmd.Subcommand)
+	if sub == "" && len(cmd.Args) > 0 {
+		sub = strings.ToLower(cmd.Args[0])
+	}
+	if sub == "" {
 		return schema.ToolResult{Output: rubeusBanner + rubeusUsage}
 	}
-
-	sub := strings.ToLower(cmd.Args[0])
 
 	switch sub {
 	case "kerberoast":
@@ -146,7 +150,13 @@ func (r *Rubeus) kerberoast(
 	for _, u := range candidates {
 		spnStr := ""
 		if len(u.SPN) > 0 { spnStr = u.SPN[0] }
-		hash := kerberoastHash(u.Username, domain, spnStr, "")
+		hashData := deterministicHex(fnv.New64a().Sum64()^uint64(len(u.Username)*31+len(spnStr)*17), 32)
+		h2 := fnv.New64a()
+		h2.Write([]byte("krb5tgs:" + u.Username + spnStr))
+		challenge := deterministicHex(h2.Sum64(), 32)
+		encrypted := deterministicHex(h2.Sum64()^0xdeadbeefcafe1234, 512)
+		_ = hashData
+		hash := kerberoastHash(u.Username, domain, spnStr, challenge+"$"+encrypted)
 
 		sb.WriteString(fmt.Sprintf("[*] SamAccountName         : %s\r\n", u.Username))
 		sb.WriteString(fmt.Sprintf("[*] DistinguishedName      : CN=%s,CN=Users,DC=%s\r\n",

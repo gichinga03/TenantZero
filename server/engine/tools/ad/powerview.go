@@ -47,6 +47,12 @@ func (pv *PowerView) Execute(
 		return pv.findInterestingDomainAcl(cmd, p)
 	case "get-domaingroupmember":
 		return pv.getDomainGroupMember(cmd, p)
+	case "set-domainobject":
+		return pv.setDomainObject(cmd, state, p)
+	case "add-domainobjectacl":
+		return pv.addDomainObjectAcl(cmd, state, p)
+	case "get-domainobjectacl":
+		return pv.getDomainObjectAcl(cmd, p)
 	default:
 		return noResult(fn, fmt.Sprintf(
 			"The term '%s' is not recognized as the name of a cmdlet, function, script file, or operable program.",
@@ -438,4 +444,135 @@ func resolveSID(name, domainSID string) string {
 	}
 	rid := 1000 + (h % 9000)
 	return fmt.Sprintf("%s-%d", domainSID, rid)
+}
+// PowerViewVerbs returns all PowerShell function names this tool handles.
+// Used to register each verb directly in the tool registry so the parser's
+// cmd.Binary (the verb itself) resolves to this tool.
+func PowerViewVerbs() []string {
+	return []string{
+		"get-domainuser",
+		"get-domaingroup",
+		"get-domaincomputer",
+		"get-domaintrust",
+		"get-domaincontroller",
+		"get-objectacl",
+		"find-interestingdomainacl",
+		"get-domaingroupmember",
+		"set-domainobject",
+		"add-domainobjectacl",
+		"get-domainobjectacl",
+	}
+}
+
+// ── Set-DomainObject ──────────────────────────────────────────────────────────
+
+func (pv *PowerView) setDomainObject(
+	cmd schema.ParsedCommand,
+	state *schema.SessionState,
+	p providers.Provider,
+) schema.ToolResult {
+	identity := flagValue(cmd.Flags, "identity")
+	if identity == "" {
+		return noResult("Set-DomainObject", "[-] -Identity is required")
+	}
+
+	// Check caller has GenericWrite or GenericAll over the target.
+	caller := state.User
+	var hasWrite bool
+	for _, a := range p.GetACLs() {
+		if strings.EqualFold(a.From, caller) && strings.EqualFold(a.To, identity) {
+			if a.Right == "GenericWrite" || a.Right == "GenericAll" || a.Right == "AllExtendedRights" {
+				hasWrite = true
+				break
+			}
+		}
+	}
+	if !hasWrite {
+		return noResult("Set-DomainObject", fmt.Sprintf(
+			"[-] Access denied: %s does not have GenericWrite over %s", caller, identity,
+		))
+	}
+
+	// Accept the set operation — in a real sim we'd mutate state, but
+	// since SPNs are static in the YAML we just acknowledge and emit
+	// a loot side-effect so win conditions can fire.
+	return schema.ToolResult{
+		Output: fmt.Sprintf("[*] Set-DomainObject executed on '%s'\r\n", identity),
+		SideEffects: []schema.SideEffect{
+			{Type: "set_domain_object", Key: identity, Value: "modified"},
+		},
+	}
+}
+
+// ── Add-DomainObjectAcl ───────────────────────────────────────────────────────
+
+func (pv *PowerView) addDomainObjectAcl(
+	cmd schema.ParsedCommand,
+	state *schema.SessionState,
+	p providers.Provider,
+) schema.ToolResult {
+	target := flagValue(cmd.Flags, "targetidentity")
+	principal := flagValue(cmd.Flags, "principalidentity")
+	rights := flagValue(cmd.Flags, "rights")
+
+	if target == "" || principal == "" {
+		return noResult("Add-DomainObjectAcl", "[-] -TargetIdentity and -PrincipalIdentity are required")
+	}
+	if rights == "" {
+		rights = "DCSync"
+	}
+
+	// Check caller has WriteDACL over target.
+	caller := state.User
+	var hasWriteDACL bool
+	for _, a := range p.GetACLs() {
+		if strings.EqualFold(a.From, caller) && strings.EqualFold(a.To, target) {
+			if a.Right == "WriteDACL" || a.Right == "GenericAll" || a.Right == "WriteOwner" {
+				hasWriteDACL = true
+				break
+			}
+		}
+	}
+	if !hasWriteDACL {
+		return noResult("Add-DomainObjectAcl", fmt.Sprintf(
+			"[-] Access denied: %s does not have WriteDACL over %s", caller, target,
+		))
+	}
+
+	return schema.ToolResult{
+		Output: fmt.Sprintf(
+			"[*] Add-DomainObjectAcl: granted '%s' rights '%s' on '%s'\r\n",
+			principal, rights, target,
+		),
+		SideEffects: []schema.SideEffect{
+			{Type: "acl_granted", Key: fmt.Sprintf("%s.%s", principal, target), Value: rights},
+		},
+	}
+}
+
+// ── Get-DomainObjectAcl ───────────────────────────────────────────────────────
+
+func (pv *PowerView) getDomainObjectAcl(cmd schema.ParsedCommand, p providers.Provider) schema.ToolResult {
+	identity := flagValue(cmd.Flags, "identity")
+	resolveGUIDs := hasFlag(cmd.Flags, "resolveguids")
+	_ = resolveGUIDs
+
+	acls := p.GetACLs()
+	var out []string
+	for _, a := range acls {
+		if identity != "" {
+			// match plain name OR DC=x,DC=y form
+			plain := strings.EqualFold(a.To, identity)
+			dn := strings.EqualFold("DC="+strings.ReplaceAll(a.To, ".", ",DC="), identity)
+			if !plain && !dn {
+				continue
+			}
+		}
+		domain := p.DomainName()
+		out = append(out, fmt.Sprintf(
+			"ObjectDN                       : CN=%s,CN=Users,DC=%s\r\nActiveDirectoryRights          : %s\r\nIdentityReferenceName          : %s\r\nAceType                        : AccessAllowed",
+			a.To, dcComponents(domain), a.Right, a.From,
+		))
+	}
+	return textResult("Get-DomainObjectAcl", out)
 }

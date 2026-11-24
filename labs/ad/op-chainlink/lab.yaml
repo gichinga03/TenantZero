@@ -19,14 +19,14 @@ domains:
         password: "Backup2019!"
         enabled: true
         groups: [Domain Users]
-        spns: ["BackupSvc/SRV01.meridian.local"]
+        spn: ["BackupSvc/SRV01.meridian.local"]
         description: "Automated backup service"
 
       - username: svc_sql
         password: "SqlServer2020!"
         enabled: true
         groups: [Domain Users]
-        spns: ["MSSQLSvc/SRV02.meridian.local:1433"]
+        spn: ["MSSQLSvc/SRV02.meridian.local:1433"]
         description: "SQL Server service account"
 
       - username: awalker
@@ -118,10 +118,13 @@ domains:
 file_system:
   "C:\\": [tools, Windows, Users]
   "C:\\tools": [Rubeus.exe, SharpHound.exe, PowerView.ps1, mimikatz.exe]
-  "C:\\Users\\jsmith\\Desktop": [note.txt]
+  "C:\\Users": [jsmith]
+  "C:\\Users\\jsmith": [Desktop]
+  "C:\\Users\\jsmith\\Desktop": [note.txt, itwiki.txt]
 
 file_contents:
-  "C:\\Users\\jsmith\\Desktop\\note.txt": "Remember to check backup service account — credentials in IT wiki"
+  "C:\\Users\\jsmith\\Desktop\\itwiki.txt": "=== IT Service Account Wiki ===\nAccount: awalker\nLast updated by: awalker\nTemp password set after audit: Autumn2024!\nPlease change on next login.\n\nAccount: svc_backup\nManaged by: awalker\nSPN: BackupSvc/SRV01.meridian.local"
+  "C:\\Users\\jsmith\\Desktop\\note.txt": "Remember to check backup service account — credentials in IT wiki. IT wiki has service account passwords. awalker updated svc_backup last week."
 
 tools:
   available: [Rubeus.exe, SharpHound.exe, PowerView.ps1, mimikatz.exe, crackmapexec, nmap]
@@ -166,6 +169,6 @@ hints:
     text: "Find who has WriteDACL on the domain object — that right can be used to grant yourself DCSync"
 
 starting_point:
-  machine: ""
-  user: ""
-  privilege: ""
+  machine: WS01
+  user: jsmith
+  privilege: local-admin

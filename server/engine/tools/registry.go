@@ -125,3 +125,9 @@ func (r *Registry) Names() []string {
 	}
 	return names
 }
+
+// RegisterAlias maps an additional key to an already-registered (or any) Tool.
+// Unlike Register, it does not iterate Name()/Aliases() — just stores the key.
+func (r *Registry) RegisterAlias(key string, t Tool) {
+	r.tools[strings.ToLower(key)] = t
+}

@@ -35,9 +35,23 @@ func LoadLab(dir string) (*schema.Lab, *schema.Engagement, error) {
 	if lab.FileSystem != nil {
 		normalized := make(schema.FileSystem, len(lab.FileSystem))
 		for k, v := range lab.FileSystem {
-			normalized[strings.ToLower(strings.ReplaceAll(k, "/", `\`))] = v
+			k = strings.ReplaceAll(k, `\\`, `\`)
+			k = strings.ReplaceAll(k, "/", `\`)
+			k = strings.ToLower(k)
+			normalized[k] = v
 		}
 		lab.FileSystem = normalized
+	}
+	if lab.FileContents != nil {
+		normalized := make(schema.FileContents, len(lab.FileContents))
+		for k, v := range lab.FileContents {
+			// Collapse double backslashes (from YAML escaping) then lowercase.
+			k = strings.ReplaceAll(k, `\\`, `\`)
+			k = strings.ReplaceAll(k, "/", `\`)
+			k = strings.ToLower(k)
+			normalized[k] = v
+		}
+		lab.FileContents = normalized
 	}
 
 	if err := validateLab(&lab); err != nil {
@@ -104,10 +118,7 @@ func InitState(lab *schema.Lab, sessionID string) *schema.SessionState {
 		// drop-in: land on a configured machine
 		state.User     = lab.StartingPoint.User
 		state.Hostname = lab.StartingPoint.Machine
-		state.CWD      = lab.StartingPoint.Machine + `\`
-		if state.CWD == "" {
-			state.CWD = `C:\`
-		}
+		state.CWD      = `C:\`
 	} else {
 		// full-chain: attacker box, no AD context yet
 		state.CWD = `C:\`

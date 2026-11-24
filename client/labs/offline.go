@@ -52,6 +52,12 @@ func (r *OfflineRunner) Run() error {
 	registry := tools.NewRegistry()
 	registry.Register(&adtools.Rubeus{})
 	registry.Register(&adtools.PowerView{})
+	// Register every PowerView verb directly so the parser's cmd.Binary
+	// (e.g. "get-domainuser") resolves to the PowerView tool.
+	pv := &adtools.PowerView{}
+	for _, verb := range adtools.PowerViewVerbs() {
+		registry.RegisterAlias(verb, pv)
+	}
 	registry.Register(&adtools.Mimikatz{})
 	registry.Register(&adtools.CrackMapExec{})
 	registry.Register(&adtools.Impacket{})
@@ -67,7 +73,7 @@ func (r *OfflineRunner) Run() error {
 
 	renderer := terminal.NewRenderer(hostname, state.User, `C:\`)
 	renderer.ClearScreen()
-	fmt.Printf("[*] Starting offline session: %s\n\n", r.labID)
+	terminal.PrintBanner(r.labID)
 
 	journalDir := filepath.Join(r.cacheDir, "..", "..", "journals")
 	j, err := journal.New(journalDir, r.labID)
@@ -115,6 +121,7 @@ func (r *OfflineRunner) Run() error {
 				renderer.UpdateContext("", eff.Value, "")
 			case schema.SideEffectSetCWD:
 				renderer.UpdateContext("", "", eff.Value)
+				sess.State.CWD = eff.Value
 			}
 		}
 

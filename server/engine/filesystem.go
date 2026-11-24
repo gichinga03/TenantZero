@@ -114,7 +114,9 @@ func (f *FS) Cat(p string) string {
 		return "The system cannot find the file specified."
 	}
 
-	norm := normPath(p)
+	// Resolve relative paths against CWD, same as Cd.
+	resolved := resolvePath(f.state.CWD, p)
+	norm := normPath(resolved)
 
 	content, ok := f.lab.FileContents[norm]
 	if !ok {
