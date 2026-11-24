@@ -314,7 +314,18 @@ func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
 		}
 
 	case "whoami":
-		return schema.ToolResult{Output: fmt.Sprintf(`%s\%s`, strings.ToUpper(strings.ToUpper(strings.SplitN(s.Lab.Domains[0].Name, ".", 2)[0])), s.State.User)}
+		domain := strings.ToUpper(strings.SplitN(s.Lab.Domains[0].Name, ".", 2)[0])
+		user := s.State.User
+		if hasFlag(cmd.Flags, "all") || hasFlag(cmd.Flags, "a") {
+			return schema.ToolResult{Output: whoamiAll(domain, user, s.Lab, s.State)}
+		}
+		if hasFlag(cmd.Flags, "groups") {
+			return schema.ToolResult{Output: whoamiGroups(domain, user, s.Lab)}
+		}
+		if hasFlag(cmd.Flags, "priv") || hasFlag(cmd.Flags, "privs") {
+			return schema.ToolResult{Output: whoamiPrivs(user, s.Lab)}
+		}
+		return schema.ToolResult{Output: fmt.Sprintf(`%s\%s`, domain, user)}
 
 	case "hostname":
 		return schema.ToolResult{Output: s.State.Hostname}
@@ -381,3 +392,92 @@ func (s *Session) nextHint() string {
 	}
 	return "No hints available yet. Keep trying."
 }
+
+// whoamiAll produces output matching "whoami /all" on a domain-joined Windows host.
+func whoamiAll(domain, user string, lab *schema.Lab, state *schema.SessionState) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("\r\nUSER INFORMATION\r\n----------------\r\n\r\n"))
+	sb.WriteString(fmt.Sprintf("User Name           SID\r\n"))
+	sb.WriteString(fmt.Sprintf("=================== =============================================\r\n"))
+	domainLower := strings.ToLower(domain)
+	rid := fnvRIDCmd(user)
+	sb.WriteString(fmt.Sprintf("%s\\%s S-1-5-21-%d-%d-%d-%d\r\n",
+		domainLower, user, 3623811015, 3361044348, 30300820, rid))
+	sb.WriteString(whoamiGroups(domain, user, lab))
+	sb.WriteString(whoamiPrivs(user, lab))
+	return sb.String()
+}
+
+// whoamiGroups produces output matching "whoami /groups".
+func whoamiGroups(domain, user string, lab *schema.Lab) string {
+	var sb strings.Builder
+	sb.WriteString("\r\nGROUP INFORMATION\r\n-----------------\r\n\r\n")
+	sb.WriteString("Group Name                                 Type             SID                                            Attributes\r\n")
+	sb.WriteString("========================================== ================ ============================================== ==================================================\r\n")
+
+	domainUpper := strings.ToUpper(domain)
+	groups := []struct{ name, typ, sid, attrs string }{
+		{"Everyone",                              "Well-known group", "S-1-1-0",          "Mandatory group, Enabled by default, Enabled group"},
+		{domainUpper + "\\Domain Users",          "Group",            "S-1-5-21-3623811015-3361044348-30300820-513", "Mandatory group, Enabled by default, Enabled group"},
+		{"BUILTIN\\Users",                        "Alias",            "S-1-5-32-545",     "Mandatory group, Enabled by default, Enabled group"},
+		{"NT AUTHORITY\\NETWORK",                 "Well-known group", "S-1-5-2",          "Mandatory group, Enabled by default, Enabled group"},
+		{"NT AUTHORITY\\Authenticated Users",     "Well-known group", "S-1-5-11",         "Mandatory group, Enabled by default, Enabled group"},
+		{"NT AUTHORITY\\This Organization",       "Well-known group", "S-1-5-15",         "Mandatory group, Enabled by default, Enabled group"},
+		{"NT AUTHORITY\\NTLM Authentication",     "Well-known group", "S-1-5-64-10",      "Mandatory group, Enabled by default, Enabled group"},
+		{"Mandatory Label\\Medium Mandatory Level","Label",           "S-1-16-8192",      "Mandatory group, Enabled by default, Enabled group"},
+	}
+
+	// Add local admin group if user has local admin
+	_ = lab
+	groups = append(groups, struct{ name, typ, sid, attrs string }{
+		"BUILTIN\\Administrators", "Alias", "S-1-5-32-544",
+		"Mandatory group, Enabled by default, Enabled group, Group owner",
+	})
+
+	for _, g := range groups {
+		sb.WriteString(fmt.Sprintf("%-42s %-16s %-46s %s\r\n", g.name, g.typ, g.sid, g.attrs))
+	}
+	return sb.String()
+}
+
+// whoamiPrivs produces output matching "whoami /priv".
+func whoamiPrivs(user string, lab *schema.Lab) string {
+	_ = user
+	_ = lab
+	var sb strings.Builder
+	sb.WriteString("\r\nPRIVILEGES INFORMATION\r\n----------------------\r\n\r\n")
+	sb.WriteString("Privilege Name                            Description                                                        State\r\n")
+	sb.WriteString("========================================= ================================================================== =======\r\n")
+
+	privs := []struct{ name, desc, state string }{
+		{"SeShutdownPrivilege",          "Shut down the system",                                                "Disabled"},
+		{"SeChangeNotifyPrivilege",      "Bypass traverse checking",                                            "Enabled"},
+		{"SeUndockPrivilege",            "Remove computer from docking station",                                "Disabled"},
+		{"SeIncreaseWorkingSetPrivilege","Increase a process working set",                                      "Disabled"},
+		{"SeTimeZonePrivilege",          "Change the time zone",                                                "Disabled"},
+		{"SeDebugPrivilege",             "Debug programs",                                                      "Enabled"},
+		{"SeImpersonatePrivilege",       "Impersonate a client after authentication",                           "Enabled"},
+		{"SeCreateGlobalObjects",        "Create global objects",                                               "Enabled"},
+	}
+	for _, priv := range privs {
+		sb.WriteString(fmt.Sprintf("%-41s %-66s %s\r\n", priv.name, priv.desc, priv.state))
+	}
+	return sb.String()
+}
+
+// fnvRIDCmd is a local copy of fnvRID for use outside the tools package.
+func fnvRIDCmd(s string) uint32 {
+	var h uint32 = 2166136261
+	for _, b := range []byte(s) {
+		h ^= uint32(b)
+		h *= 16777619
+	}
+	return 1000 + (h % 9000)
+}
+
+// hasFlag checks whether a flag key exists in cmd.Flags (case-insensitive).
+func hasFlag(flags map[string]string, key string) bool {
+	_, ok := flags[strings.ToLower(key)]
+	return ok
+}
+

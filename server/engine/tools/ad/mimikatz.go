@@ -235,24 +235,42 @@ func (m *Mimikatz) lsadumpDcsync(
 	guid := deterministicGUID(targetUser)
 	domain := providers.GetDomain(provider)
 
+	// krbtgt-specific flags — disabled account, no expiry
+	accountType := "30000000 ( USER_OBJECT )"
+	uac := "00010200 ( NORMAL_ACCOUNT DONT_EXPIRE_PASSWD )"
+	if strings.ToLower(targetUser) == "krbtgt" {
+		uac = "00000202 ( ACCOUNTDISABLE NORMAL_ACCOUNT )"
+	}
+
+	// Real AD domain SID — deterministic from domain name
+	domainSID := deterministicDomainSID(domain)
+	sid = fmt.Sprintf("%s-%d", domainSID, fnvRID(targetUser))
+
+	// Real modern LM hash placeholder
+	lmHash := "aad3b435b51404eeaad3b435b51404ee"
+
+	// Real-looking GUID
+	guid = deterministicGUID(targetUser)
+
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "[DC] '%s' will be the domain\n", domain)
-	fmt.Fprintf(&sb, "[DC] 'DC01.%s' will be the DC server\n", domain)
-	fmt.Fprintf(&sb, "[DC] '%s' will be the user account\n", targetUser)
-	sb.WriteString("[rpc] Service  : ldap\n")
-	sb.WriteString("[rpc] AuthnSvc : GSS_NEGOTIATE (9)\n\n")
-	fmt.Fprintf(&sb, "Object RDN           : %s\n\n", targetUser)
-	sb.WriteString("** SAM ACCOUNT **\n\n")
-	fmt.Fprintf(&sb, "SAM Username         : %s\n", targetUser)
-	fmt.Fprintf(&sb, "Account Type         : 30000000 ( USER_OBJECT )\n")
-	sb.WriteString("User Account Control : 00010200 ( NORMAL_ACCOUNT DONT_EXPIRE_PASSWD )\n")
-	sb.WriteString("Account expiration   :\n")
-	fmt.Fprintf(&sb, "Password last change : %s\n", time.Now().Format("1/2/2006 3:04:05 PM"))
-	fmt.Fprintf(&sb, "Object Security ID   : %s\n", sid)
-	fmt.Fprintf(&sb, "Object Relative ID   : %d\n\n", fnvRID(targetUser))
-	sb.WriteString("Credentials:\n")
-	fmt.Fprintf(&sb, "  Hash NTLM: %s\n", hash)
-	sb.WriteString("    ntlm- 0: " + hash + "\n")
+	fmt.Fprintf(&sb, "[DC] '%s' will be the domain\r\n", domain)
+	fmt.Fprintf(&sb, "[DC] 'DC01.%s' will be the DC server\r\n", domain)
+	fmt.Fprintf(&sb, "[DC] '%s' will be the user account\r\n", targetUser)
+	sb.WriteString("[rpc] Service  : ldap\r\n")
+	sb.WriteString("[rpc] AuthnSvc : GSS_NEGOTIATE (9)\r\n\r\n")
+	fmt.Fprintf(&sb, "Object RDN           : %s\r\n\r\n", targetUser)
+	sb.WriteString("** SAM ACCOUNT **\r\n\r\n")
+	fmt.Fprintf(&sb, "SAM Username         : %s\r\n", targetUser)
+	fmt.Fprintf(&sb, "Account Type         : %s\r\n", accountType)
+	fmt.Fprintf(&sb, "User Account Control : %s\r\n", uac)
+	sb.WriteString("Account expiration   :\r\n")
+	fmt.Fprintf(&sb, "Password last change : %s\r\n", time.Now().Format("1/2/2006 3:04:05 PM"))
+	fmt.Fprintf(&sb, "Object Security ID   : %s\r\n", sid)
+	fmt.Fprintf(&sb, "Object Relative ID   : %d\r\n\r\n", fnvRID(targetUser))
+	sb.WriteString("Credentials:\r\n")
+	fmt.Fprintf(&sb, "  Hash NTLM: %s\r\n", hash)
+	sb.WriteString("    ntlm- 0: " + hash + "\r\n")
+	sb.WriteString("    lm  - 0: " + lmHash + "\r\n")
 	sb.WriteString("    lm  - 0: 00000000000000000000000000000000\n\n")
 	fmt.Fprintf(&sb, "Object GUID          : %s\n", guid)
 
@@ -457,3 +475,17 @@ func deterministicLocalSIDParts(hostname string) string {
 	v := h.Sum64()
 	return fmt.Sprintf("%d-%d-%d", uint32(v), uint32(v>>16), uint32(v>>32))
 }
+
+// deterministicDomainSID builds a stable S-1-5-21-X-Y-Z from the domain name.
+func deterministicDomainSID(domain string) string {
+	h := fnv.New64a()
+	h.Write([]byte(domain))
+	v := h.Sum64()
+	a := uint32(v & 0xffffffff)
+	b := uint32((v >> 32) & 0xffffffff)
+	h2 := fnv.New32a()
+	h2.Write([]byte(domain + "salt"))
+	c2 := h2.Sum32()
+	return fmt.Sprintf("S-1-5-21-%d-%d-%d", a, b, c2)
+}
+
