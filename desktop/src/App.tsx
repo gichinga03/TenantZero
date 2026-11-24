@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import LoginScreen from './shell/LoginScreen';
 import WindowManager from './shell/WindowManager';
 
@@ -10,14 +10,19 @@ export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loginError, setLoginError] = useState('');
 
-  const handleLogin = (username: string, password: string) => {
+  const handleLogin = useCallback((username: string, password: string) => {
     if (password === CORRECT_PASSWORD) {
       setIsLoggedIn(true);
       setLoginError('');
     } else {
       setLoginError('The password is incorrect. Try again.');
     }
-  };
+  }, []);
+
+  const handleLock = useCallback(() => {
+    setIsLoggedIn(false);
+    setLoginError('');
+  }, []);
 
   return (
     <div style={{ position: 'fixed', inset: 0, overflow: 'hidden', background: '#000' }}>
@@ -28,7 +33,7 @@ export default function App() {
             onLogin={handleLogin}
             loginError={loginError}
           />
-        : <WindowManager />
+        : <WindowManager onLock={handleLock} />
       }
     </div>
   );

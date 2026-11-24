@@ -32,7 +32,7 @@ interface WindowState {
   zIndex: number;
 }
 
-export default function WindowManager() {
+export default function WindowManager({ onLock }: { onLock: () => void }) {
   const [openWindows, setOpenWindows] = useState<WindowState[]>([]);
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
   const [zCounter, setZCounter] = useState(100);
@@ -152,6 +152,8 @@ export default function WindowManager() {
         }))}
         activeWindowId={activeWindowId}
         onWindowClick={onWindowClick}
+        onLock={onLock}
+        onOpenApp={openApp}
         onStartClick={() => {}}
       />
     </div>
