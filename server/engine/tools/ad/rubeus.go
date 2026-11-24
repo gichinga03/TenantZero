@@ -269,6 +269,10 @@ func (r *Rubeus) asktgt(
 		Output: sb.String(),
 		SideEffects: []schema.SideEffect{
 			{
+				Type:  schema.SideEffectSetSessionUser,
+				Value: user,
+			},
+			{
 				Type:  schema.SideEffectAddTicket,
 				Key:   fmt.Sprintf("ticket.%s.tgt", strings.ToLower(user)),
 				Value: string(ticketJSON),

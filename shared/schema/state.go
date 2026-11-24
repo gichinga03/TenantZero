@@ -29,6 +29,7 @@ type SessionState struct {
 
 	// Tickets lists Kerberos tickets the student has obtained or forged.
 	Tickets []Ticket `json:"tickets"`
+	GrantedACLs map[string]string `json:"granted_acls"`
 
 	// Tokens lists OAuth/device-code tokens obtained during the session,
 	// relevant for Azure-hybrid labs.

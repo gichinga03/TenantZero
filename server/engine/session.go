@@ -90,6 +90,12 @@ func (s *Session) applySideEffect(se schema.SideEffect) {
 		}
 		s.State.Tokens = append(s.State.Tokens, tok)
 
+	case "acl_granted":
+		if s.State.GrantedACLs == nil {
+			s.State.GrantedACLs = make(map[string]string)
+		}
+		s.State.GrantedACLs[strings.ToLower(se.Key)] = se.Value
+
 	case schema.SideEffectSetCWD:
 		// Filesystem.Cd already validated the path; Apply just stores it.
 		s.State.CWD = se.Value

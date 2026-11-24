@@ -523,10 +523,12 @@ func (pv *PowerView) addDomainObjectAcl(
 	}
 
 	// Check caller has WriteDACL over target.
+	// Normalise "DC=meridian,DC=local" → "meridian.local" for ACL table lookup.
 	caller := state.User
+	aclTarget := normDN(target)
 	var hasWriteDACL bool
 	for _, a := range p.GetACLs() {
-		if strings.EqualFold(a.From, caller) && strings.EqualFold(a.To, target) {
+		if strings.EqualFold(a.From, caller) && (strings.EqualFold(a.To, aclTarget) || strings.EqualFold(a.To, target)) {
 			if a.Right == "WriteDACL" || a.Right == "GenericAll" || a.Right == "WriteOwner" {
 				hasWriteDACL = true
 				break
@@ -576,3 +578,21 @@ func (pv *PowerView) getDomainObjectAcl(cmd schema.ParsedCommand, p providers.Pr
 	}
 	return textResult("Get-DomainObjectAcl", out)
 }
+
+// normDN converts "DC=meridian,DC=local" → "meridian.local" for ACL table lookups.
+func normDN(dn string) string {
+	dn = strings.ToLower(strings.TrimSpace(dn))
+	if !strings.HasPrefix(dn, "dc=") {
+		return dn
+	}
+	parts := strings.Split(dn, ",")
+	var labels []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if strings.HasPrefix(p, "dc=") {
+			labels = append(labels, strings.TrimPrefix(p, "dc="))
+		}
+	}
+	return strings.Join(labels, ".")
+}
+

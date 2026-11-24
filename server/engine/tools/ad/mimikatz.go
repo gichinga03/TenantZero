@@ -48,12 +48,11 @@ func (m *Mimikatz) Execute(
 	state *schema.SessionState,
 	provider providers.Provider,
 ) schema.ToolResult {
-	if len(cmd.Args) == 0 {
+	// Support both "mimikatz # lsadump::dcsync" (Subcommand) and direct Args.
+	invocation := strings.TrimSpace(cmd.Subcommand + " " + strings.Join(cmd.Args, " "))
+	if strings.TrimSpace(invocation) == "" {
 		return schema.ToolResult{Output: mimikatzBanner}
 	}
-
-	// Join args to reconstruct the module::command string.
-	invocation := strings.Join(cmd.Args, " ")
 	parts := strings.SplitN(invocation, "::", 2)
 	if len(parts) != 2 {
 		return schema.ToolResult{Output: mimikatzBanner}
@@ -67,7 +66,15 @@ func (m *Mimikatz) Execute(
 		subcmd = strings.ToLower(subcmdParts[0])
 	}
 
+	// Flags come from cmd.Flags (parsed by parseFlags in command.go), not subcmdParts.
+	// parseMimikatzFlags expects []string of "/key:val" but cmd.Flags is map[string]string already.
+	// Merge both: subcmdParts[1:] for inline args, cmd.Flags for pre-parsed flags.
 	flags := parseMimikatzFlags(subcmdParts[1:])
+	for k, v := range cmd.Flags {
+		if _, exists := flags[strings.ToLower(k)]; !exists {
+			flags[strings.ToLower(k)] = v
+		}
+	}
 
 	switch module + "::" + subcmd {
 	case "sekurlsa::logonpasswords":
@@ -207,7 +214,17 @@ func (m *Mimikatz) lsadumpDcsync(
 		}
 	}
 
-	if !provider.HasReplicationRights(state.User) && !provider.HasDomainAdmin(state.User) {
+	// Check runtime-granted DCSync rights (via Add-DomainObjectAcl) first.
+	hasDCSync := false
+	if state.GrantedACLs != nil {
+		for k, v := range state.GrantedACLs {
+			if strings.HasPrefix(k, strings.ToLower(state.User)+".") && strings.EqualFold(v, "DCSync") {
+				hasDCSync = true
+				break
+			}
+		}
+	}
+	if !hasDCSync && !provider.HasReplicationRights(state.User) && !provider.HasDomainAdmin(state.User) {
 		return schema.ToolResult{
 			Output: "ERROR kuhl_m_lsadump_dcsync ; GetNCChanges: 0x00002105 (ERROR_DS_DRA_ACCESS_DENIED)",
 		}
