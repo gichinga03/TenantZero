@@ -34,7 +34,7 @@ func (e *Evaluator) Check(lastCmd schema.ParsedCommand, lastResult schema.ToolRe
 		completed[obj.Label] = true
 	}
 
-	m := matcher.NewMatcher(nil, 2)
+	m := matcher.NewMatcher(nil, 0) // command_executed: exact+wildcard only
 
 	for _, wc := range e.lab.WinConditions {
 		if completed[wc.Label] {
@@ -81,8 +81,16 @@ func (e *Evaluator) evaluate(wc schema.WinCondition, cmd schema.ParsedCommand, r
 // checkCommandExecuted matches lastCmd.Binary + lastCmd.Subcommand against
 // WinCondition.Match using the shared matcher (exact → wildcard → fuzzy).
 func (e *Evaluator) checkCommandExecuted(wc schema.WinCondition, cmd schema.ParsedCommand, m *matcher.Matcher) bool {
-	subject := strings.TrimSpace(cmd.Binary + " " + cmd.Subcommand)
+	parts := []string{cmd.Binary}
+	if cmd.Subcommand != "" {
+		parts = append(parts, cmd.Subcommand)
+	}
+	parts = append(parts, cmd.Args...)
+	subject := strings.TrimSpace(strings.Join(parts, " "))
 	m.AddPattern(wc.Match)
+	if wc.Match == "" {
+		m.AddPattern(wc.Value)
+	}
 	result := m.Match(subject)
 	return result.Level != matcher.MatchNone
 }

@@ -237,7 +237,7 @@ func (h *Handler) initSession(r *http.Request, userID string) (
 		labID = row.LabID
 		sessRow = row
 
-		labPath := fmt.Sprintf("%s/ad/%s/lab.yaml", h.labsDir, labID)
+		labPath := fmt.Sprintf("%s/ad/%s", h.labsDir, labID)
 		loadedLab, _, err := engine.LoadLab(labPath)
 		if err != nil {
 			return nil, nil, nil, store.SessionRow{}, fmt.Errorf("load lab: %w", err)
@@ -248,7 +248,7 @@ func (h *Handler) initSession(r *http.Request, userID string) (
 		if labID == "" {
 			return nil, nil, nil, store.SessionRow{}, fmt.Errorf("lab_id required")
 		}
-		labPath := fmt.Sprintf("%s/ad/%s/lab.yaml", h.labsDir, labID)
+		labPath := fmt.Sprintf("%s/ad/%s", h.labsDir, labID)
 		loadedLab, _, err := engine.LoadLab(labPath)
 		if err != nil {
 			return nil, nil, nil, store.SessionRow{}, fmt.Errorf("load lab: %w", err)

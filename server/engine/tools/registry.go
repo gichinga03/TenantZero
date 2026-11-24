@@ -51,6 +51,11 @@ func (r *Registry) Dispatch(
 	overrides map[string]schema.ToolOverride,
 ) schema.ToolResult {
 	tool, ok := r.Get(cmd.Binary)
+	// PowerView cmdlets arrive with the function name as Binary (e.g. "Get-DomainUser").
+	// Fall back to the PowerView tool when the binary name contains a hyphen.
+	if !ok && strings.Contains(cmd.Binary, "-") {
+		tool, ok = r.Get("PowerView.ps1")
+	}
 	if !ok {
 		return shellError(fmt.Sprintf(
 			"'%s' is not recognized as an internal or external command, operable program or batch file.",

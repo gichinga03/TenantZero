@@ -177,7 +177,7 @@ func cmdConnect(labID string) error {
 		fmt.Fprintf(os.Stderr, "[!] Could not open engagement PDF: %v\n", err)
 	}
 
-	c := wsclient.New(cfg.ServerURL, cfg.Token)
+	c := wsclient.New(cfg.ServerURL, cfg.Token, labID)
 	if err := c.Connect(); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
@@ -213,6 +213,9 @@ func cmdConnect(labID string) error {
 		}
 		history = append(history, input)
 
+		if input == "exit" || input == "quit" {
+			break
+		}
 		if input == "clear" || input == "cls" {
 			renderer.ClearScreen()
 			continue

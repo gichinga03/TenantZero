@@ -271,7 +271,6 @@ func (m *Mimikatz) lsadumpDcsync(
 	fmt.Fprintf(&sb, "  Hash NTLM: %s\r\n", hash)
 	sb.WriteString("    ntlm- 0: " + hash + "\r\n")
 	sb.WriteString("    lm  - 0: " + lmHash + "\r\n")
-	sb.WriteString("    lm  - 0: 00000000000000000000000000000000\n\n")
 	fmt.Fprintf(&sb, "Object GUID          : %s\n", guid)
 
 	effects := []schema.SideEffect{
@@ -447,17 +446,18 @@ func fnvRID(s string) uint32 {
 }
 
 // deterministicGUID returns a fake GUID seeded from a username.
-func deterministicGUID(username string) string {
+func deterministicGUID(s string) string {
 	h := fnv.New64a()
-	h.Write([]byte(username))
-	v := h.Sum64()
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		uint32(v),
-		uint16(v>>16),
-		uint16(v>>32),
-		uint16(v>>48),
-		v&0xffffffffffff,
-	)
+	h.Write([]byte("guid:" + s))  // prefix prevents hash echo in first segment
+	v1 := h.Sum64()
+	h.Write([]byte("salt2"))
+	v2 := h.Sum64()
+	a := uint32(v1 >> 32)
+	b := uint16(v1 & 0xffff)
+	cc := uint16((v1>>16)&0x0fff) | 0x4000
+	d := uint16((v2 & 0x3fff) | 0x8000)
+	e := v2 >> 16
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", a, b, cc, d, e)
 }
 
 // deterministicSysKey returns a fake 32-hex-char syskey seeded from hostname.

@@ -24,14 +24,15 @@ type inMsg struct {
 
 // Client manages a single WebSocket connection to the TenantZero server.
 type Client struct {
+	labID     string
 	conn      *websocket.Conn
 	token     string
 	serverURL string
 }
 
 // New constructs a Client. Call Connect before Send/Recv.
-func New(serverURL, token string) *Client {
-	return &Client{serverURL: serverURL, token: token}
+func New(serverURL, token, labID string) *Client {
+	return &Client{serverURL: serverURL, token: token, labID: labID}
 }
 
 // Connect dials the server WebSocket endpoint at /ws?token=<jwt>.
@@ -50,6 +51,9 @@ func (c *Client) Connect() error {
 	u.Path = "/ws"
 	q := u.Query()
 	q.Set("token", c.token)
+	if c.labID != "" {
+		q.Set("lab_id", c.labID)
+	}
 	u.RawQuery = q.Encode()
 
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)

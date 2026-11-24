@@ -1,0 +1,36 @@
+{
+  "id": "op-chainlink",
+  "lab_id": "op-chainlink",
+  "user": "awalker",
+  "hostname": "WS01",
+  "cwd": "C:\\",
+  "loot": {
+    "ntlm_hashes": {},
+    "spn_hashes": null,
+    "plaintext_creds": {},
+    "ntds_dump": null,
+    "pfx_certs": {},
+    "arbitrary": null
+  },
+  "tickets": [
+    {
+      "type": "TGT",
+      "user": "awalker",
+      "domain": "MERIDIAN.LOCAL",
+      "service": "",
+      "hash": "e8f9577329167a58be76b3bd635605cf",
+      "forged": false,
+      "expires_at": "2026-11-24T20:07:16.480811753+03:00"
+    }
+  ],
+  "granted_acls": {
+    "awalker.dc=meridian,dc=local": "DCSync"
+  },
+  "tokens": [],
+  "completed_objectives": [],
+  "used_hints": null,
+  "journal": [],
+  "started_at": "2026-11-24T07:07:06.697209508Z",
+  "last_active": "0001-01-01T00:00:00Z",
+  "mode": ""
+}

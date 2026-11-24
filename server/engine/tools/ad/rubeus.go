@@ -261,7 +261,7 @@ func (r *Rubeus) asktgt(
 	sb.WriteString(fmt.Sprintf("  KeyType                  :  rc4_hmac\r\n"))
 	sb.WriteString(fmt.Sprintf("  Base64(key)              :  %s\r\n", shortBlob(user)))
 	sb.WriteString(fmt.Sprintf("  ASREP (key)              :  %s\r\n\r\n", strings.ToUpper(ntlmFromPassword(user))))
-	sb.WriteString(fmt.Sprintf("[*] Saving ticket to '%s.kirbi'\r\n"))
+	fmt.Fprintf(&sb, "[*] Saving ticket to '%s.kirbi'\r\n", user)
 	sb.WriteString(fmt.Sprintf("[*] Ticket written to disk!\r\n"))
 	sb.WriteString(fmt.Sprintf("[*] LUID                   :  %s\r\n", luid))
 

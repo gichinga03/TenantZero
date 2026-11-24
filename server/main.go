@@ -23,7 +23,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("[!] store.New: %v", err)
 	}
-	if err := db.Migrate("./server/store/migrations"); err != nil {
+	if err := db.Migrate("./store/migrations"); err != nil {
 		log.Fatalf("[!] migrate: %v", err)
 	}
 
