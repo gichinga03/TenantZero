@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { useBeaconSocket } from '../../hooks/useBeaconSocket'
 
-// ── Colour tokens (match AlloyNet's real palette) ─────────────────
 const C = {
   bg:      '#1a1a1a',
   panel:   '#252526',
@@ -21,27 +21,25 @@ const C = {
   toolbar: '#333333',
 }
 
-// ── Fake data types ───────────────────────────────────────────────
 interface Beacon {
-  id:          string
-  hostname:    string
-  username:    string
-  internalIp:  string
-  os:          string
-  architecture:string
-  sleep:       number
-  jitter:      number
-  lastSeen:    string
-  status:      'active' | 'idle' | 'dead'
-  pid:         number
-  integrity:   'Medium' | 'High' | 'SYSTEM'
+  id:           string
+  hostname:     string
+  username:     string
+  internalIp:   string
+  os:           string
+  architecture: string
+  sleep:        number
+  jitter:       number
+  lastSeen:     string
+  status:       'active' | 'idle' | 'dead'
+  pid:          number
+  integrity:    'Medium' | 'High' | 'SYSTEM'
 }
 
 interface ProcessEntry { pid: number; ppid: number; name: string; path: string }
 interface Line { type: 'cmd' | 'out' | 'err' | 'info'; text: string }
 interface CtxMenu { x: number; y: number; beacon: Beacon }
 
-// ── Seed beacons ──────────────────────────────────────────────────
 const SEED_BEACONS: Beacon[] = [
   {
     id:           'b1a2c3d4-e5f6-7890-abcd-ef1234567890',
@@ -57,23 +55,8 @@ const SEED_BEACONS: Beacon[] = [
     pid:          4821,
     integrity:    'Medium',
   },
-  {
-    id:           'f9e8d7c6-b5a4-3210-fedc-ba9876543210',
-    hostname:     'SRV-BACKUP01',
-    username:     'MERIDIAN\\svc_backup',
-    internalIp:   '10.10.10.50',
-    os:           'Windows Server 2019',
-    architecture: 'x64',
-    sleep:        300,
-    jitter:       10,
-    lastSeen:     new Date(Date.now() - 290000).toISOString(),
-    status:       'idle',
-    pid:          1104,
-    integrity:    'High',
-  },
 ]
 
-// ── Fake process list for the process browser ─────────────────────
 const FAKE_PROCS: ProcessEntry[] = [
   { pid: 4,    ppid: 0,    name: 'System',               path: '' },
   { pid: 376,  ppid: 4,    name: 'smss.exe',              path: '\\SystemRoot\\System32\\smss.exe' },
@@ -104,85 +87,26 @@ const FAKE_PROCS: ProcessEntry[] = [
   { pid: 5100, ppid: 836,  name: 'conhost.exe',           path: 'C:\\Windows\\System32\\conhost.exe' },
 ]
 
-// ── Fake command responses ─────────────────────────────────────────
 function fakeResponse(cmd: string, beacon: Beacon): { delay: number; lines: Line[] } {
   const c = cmd.trim().toLowerCase()
-
-  if (c === 'pwd' || c === 'getwd') return {
-    delay: 600,
-    lines: [{ type: 'out', text: `C:\\Users\\${beacon.username.split('\\')[1] || 'user'}\\Desktop` }],
-  }
-  if (c === 'whoami') return {
-    delay: 500,
-    lines: [{ type: 'out', text: beacon.username.toLowerCase() }],
-  }
-  if (c === 'whoami /priv' || c === 'whoami/priv') return {
-    delay: 700,
-    lines: [{ type: 'out', text: `PRIVILEGES INFORMATION\n----------------------\n\nPrivilege Name                Description                    State\n============================= ============================== =======\nSeShutdownPrivilege           Shut down the system           Disabled\nSeChangeNotifyPrivilege       Bypass traverse checking       Enabled\nSeUndockPrivilege             Remove computer from docking   Disabled\nSeIncreaseWorkingSetPrivilege Increase a process working set Disabled` }],
-  }
-  if (c === 'ps' || c === 'getps') return {
-    delay: 1200,
-    lines: [
-      { type: 'info', text: `[*] Process list — ${FAKE_PROCS.length} entries` },
-      { type: 'out', text: FAKE_PROCS.map(p =>
-        `${String(p.pid).padStart(5)}  ${String(p.ppid).padStart(5)}  ${p.name.padEnd(28)} ${p.path}`
-      ).join('\n') },
-    ],
-  }
-  if (c === 'processbrowser') return {
-    delay: 1100,
-    lines: [{ type: 'out', text: JSON.stringify(FAKE_PROCS) }],
-  }
-  if (c === 'ipconfig') return {
-    delay: 700,
-    lines: [{ type: 'out', text: `Windows IP Configuration\n\nEthernet adapter Ethernet0:\n   Connection-specific DNS Suffix  . : meridian.local\n   IPv4 Address. . . . . . . . . . . : ${beacon.internalIp}\n   Subnet Mask . . . . . . . . . . . : 255.255.255.0\n   Default Gateway . . . . . . . . . : 10.10.10.1` }],
-  }
-  if (c === 'hostname') return {
-    delay: 400,
-    lines: [{ type: 'out', text: beacon.hostname }],
-  }
-  if (c.startsWith('sleep ')) {
-    const n = parseInt(c.split(' ')[1]) || 60
-    return { delay: 300, lines: [{ type: 'info', text: `[*] Sleep set to ${n}s` }] }
-  }
-  if (c === 'getuid' || c === 'id') return {
-    delay: 450,
-    lines: [{ type: 'out', text: `[*] You are ${beacon.username} (Integrity: ${beacon.integrity})` }],
-  }
-  if (c.startsWith('shell ') || c.startsWith('cmd ')) {
-    const sub = cmd.replace(/^shell |^cmd /i, '').trim()
-    return {
-      delay: 900,
-      lines: [{ type: 'out', text: `'${sub}' is not recognized as an internal or external command,\noperable program or batch file.` }],
-    }
-  }
-  if (c.startsWith('upload ')) return {
-    delay: 1500,
-    lines: [{ type: 'info', text: `[*] Upload task queued — file will transfer on next callback` }],
-  }
-  if (c.startsWith('download ')) return {
-    delay: 1500,
-    lines: [{ type: 'info', text: `[*] Download task queued — file will transfer on next callback` }],
-  }
-  if (c === 'help' || c === '?') return {
-    delay: 200,
-    lines: [{ type: 'out', text: `AlloyNet Beacon Commands\n========================\npwd / getwd          Current working directory\nwhoami               Current user\nwhoami /priv         Token privileges\nps / getps           Process list\nprocessbrowser       Interactive process browser\nipconfig             Network interfaces\nhostname             Machine hostname\ngetuid               User + integrity level\nsleep <sec>          Set callback interval\nshell <cmd>          Run via cmd.exe\nupload <src> <dst>   Upload file to target\ndownload <path>      Download file from target\nkill                 Terminate beacon\nclear                Clear console` }],
-  }
-  if (c === 'kill') return {
-    delay: 300,
-    lines: [
-      { type: 'err', text: `[!] Kill task queued — beacon will exit on next callback` },
-    ],
-  }
+  if (c === 'pwd' || c === 'getwd') return { delay: 600, lines: [{ type: 'out', text: `C:\\Users\\${beacon.username.split('\\')[1] || 'user'}\\Desktop` }] }
+  if (c === 'whoami') return { delay: 500, lines: [{ type: 'out', text: beacon.username.toLowerCase() }] }
+  if (c === 'whoami /priv' || c === 'whoami/priv') return { delay: 700, lines: [{ type: 'out', text: `PRIVILEGES INFORMATION\n----------------------\n\nPrivilege Name                Description                    State\n============================= ============================== =======\nSeShutdownPrivilege           Shut down the system           Disabled\nSeChangeNotifyPrivilege       Bypass traverse checking       Enabled\nSeUndockPrivilege             Remove computer from docking   Disabled\nSeIncreaseWorkingSetPrivilege Increase a process working set Disabled` }] }
+  if (c === 'ps' || c === 'getps') return { delay: 1200, lines: [{ type: 'info', text: `[*] Process list — ${FAKE_PROCS.length} entries` }, { type: 'out', text: FAKE_PROCS.map(p => `${String(p.pid).padStart(5)}  ${String(p.ppid).padStart(5)}  ${p.name.padEnd(28)} ${p.path}`).join('\n') }] }
+  if (c === 'processbrowser') return { delay: 1100, lines: [{ type: 'out', text: JSON.stringify(FAKE_PROCS) }] }
+  if (c === 'ipconfig') return { delay: 700, lines: [{ type: 'out', text: `Windows IP Configuration\n\nEthernet adapter Ethernet0:\n   Connection-specific DNS Suffix  . : meridian.local\n   IPv4 Address. . . . . . . . . . . : ${beacon.internalIp}\n   Subnet Mask . . . . . . . . . . . : 255.255.255.0\n   Default Gateway . . . . . . . . . : 10.10.10.1` }] }
+  if (c === 'hostname') return { delay: 400, lines: [{ type: 'out', text: beacon.hostname }] }
+  if (c.startsWith('sleep ')) { const n = parseInt(c.split(' ')[1]) || 60; return { delay: 300, lines: [{ type: 'info', text: `[*] Sleep set to ${n}s` }] } }
+  if (c === 'getuid' || c === 'id') return { delay: 450, lines: [{ type: 'out', text: `[*] You are ${beacon.username} (Integrity: ${beacon.integrity})` }] }
+  if (c.startsWith('shell ') || c.startsWith('cmd ')) { const sub = cmd.replace(/^shell |^cmd /i, '').trim(); return { delay: 900, lines: [{ type: 'out', text: `'${sub}' is not recognized as an internal or external command,\noperable program or batch file.` }] } }
+  if (c.startsWith('upload ')) return { delay: 1500, lines: [{ type: 'info', text: '[*] Upload task queued — file will transfer on next callback' }] }
+  if (c.startsWith('download ')) return { delay: 1500, lines: [{ type: 'info', text: '[*] Download task queued — file will transfer on next callback' }] }
+  if (c === 'help' || c === '?') return { delay: 200, lines: [{ type: 'out', text: `AlloyNet Beacon Commands\n========================\npwd / getwd          Current working directory\nwhoami               Current user\nwhoami /priv         Token privileges\nps / getps           Process list\nprocessbrowser       Interactive process browser\nipconfig             Network interfaces\nhostname             Machine hostname\ngetuid               User + integrity level\nsleep <sec>          Set callback interval\nshell <cmd>          Run via cmd.exe\nupload <src> <dst>   Upload file to target\ndownload <path>      Download file from target\nkill                 Terminate beacon\nclear                Clear console` }] }
+  if (c === 'kill') return { delay: 300, lines: [{ type: 'err', text: '[!] Kill task queued — beacon will exit on next callback' }] }
   if (c === 'clear') return { delay: 0, lines: [] }
-
-  return {
-    delay: 800,
-    lines: [{ type: 'err', text: `[-] Unknown command: ${cmd.split(' ')[0]}\n    Type 'help' for available commands` }],
-  }
+  return { delay: 800, lines: [{ type: 'err', text: `[-] Unknown command: ${cmd.split(' ')[0]}\n    Type 'help' for available commands` }] }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────
 function ago(iso: string): string {
   if (!iso) return '—'
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
@@ -198,27 +122,19 @@ function statusDot(b: Beacon) {
   return <span style={{ color: col, fontSize: 14 }} title={b.status}>{sym}</span>
 }
 
-// ── Process Browser sub-component ────────────────────────────────
 function ProcessTable({ raw }: { raw: string }) {
   const [filter,  setFilter]  = useState('')
   const [sortCol, setSortCol] = useState<'pid' | 'ppid' | 'name' | 'path'>('pid')
   const [sortAsc, setSortAsc] = useState(true)
 
   let rows: ProcessEntry[] = []
-  try { rows = JSON.parse(raw) } catch {
-    return <span style={{ color: C.red }}>[!] malformed process JSON</span>
-  }
+  try { rows = JSON.parse(raw) } catch { return <span style={{ color: C.red }}>[!] malformed process JSON</span> }
 
   const filtered = rows
-    .filter(r => !filter ||
-      r.name.toLowerCase().includes(filter.toLowerCase()) ||
-      r.path.toLowerCase().includes(filter.toLowerCase()) ||
-      String(r.pid).includes(filter))
+    .filter(r => !filter || r.name.toLowerCase().includes(filter.toLowerCase()) || r.path.toLowerCase().includes(filter.toLowerCase()) || String(r.pid).includes(filter))
     .sort((a, b) => {
       const av = String(a[sortCol]), bv = String(b[sortCol])
-      return sortAsc
-        ? av.localeCompare(bv, undefined, { numeric: true })
-        : bv.localeCompare(av, undefined, { numeric: true })
+      return sortAsc ? av.localeCompare(bv, undefined, { numeric: true }) : bv.localeCompare(av, undefined, { numeric: true })
     })
 
   const PTH: React.CSSProperties = {
@@ -243,11 +159,7 @@ function ProcessTable({ raw }: { raw: string }) {
         <span style={{ color: C.blue, fontSize: 11 }}>[processbrowser]</span>
         <span style={{ color: C.dim, fontSize: 11 }}>{filtered.length}/{rows.length} processes</span>
         <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="filter…"
-          style={{
-            background: '#2a2a2a', border: `1px solid ${C.border}`, color: C.text,
-            fontSize: 11, padding: '1px 6px', borderRadius: 2,
-            fontFamily: 'monospace', outline: 'none', width: 160,
-          }} />
+          style={{ background: '#2a2a2a', border: `1px solid ${C.border}`, color: C.text, fontSize: 11, padding: '1px 6px', borderRadius: 2, fontFamily: 'monospace', outline: 'none', width: 160 }} />
       </div>
       <div style={{ maxHeight: 300, overflowY: 'auto', border: `1px solid ${C.border}` }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
@@ -260,8 +172,7 @@ function ProcessTable({ raw }: { raw: string }) {
           </thead>
           <tbody>
             {filtered.map((r, i) => (
-              <tr key={r.pid}
-                style={{ background: i % 2 === 0 ? C.rowEven : C.rowOdd }}
+              <tr key={r.pid} style={{ background: i % 2 === 0 ? C.rowEven : C.rowOdd }}
                 onMouseEnter={e => { e.currentTarget.style.background = C.rowHov }}
                 onMouseLeave={e => { e.currentTarget.style.background = i % 2 === 0 ? C.rowEven : C.rowOdd }}>
                 <td style={{ padding: '2px 8px', fontSize: 11, color: C.yellow, fontFamily: 'monospace', borderRight: '1px solid #222' }}>{r.pid}</td>
@@ -277,8 +188,13 @@ function ProcessTable({ raw }: { raw: string }) {
   )
 }
 
-// ── Main ──────────────────────────────────────────────────────────
-export default function Operations() {
+interface OperationsProps {
+  token: string
+}
+
+export default function Operations({ token }: OperationsProps) {
+  const { connected, lastMessage, wsSend } = useBeaconSocket(token || null, 'op-chainlink')
+
   const [beacons,       setBeacons]       = useState<Beacon[]>(SEED_BEACONS)
   const [activeBeacon,  setActiveBeacon]  = useState<Beacon | null>(null)
   const [splitPct,      setSplitPct]      = useState(42)
@@ -298,11 +214,31 @@ export default function Operations() {
   const consoleEndRef = useRef<HTMLDivElement>(null)
   const inputRef      = useRef<HTMLInputElement>(null)
 
-  // live "last seen" ticker
+  // ── lastMessage effect (real WS responses) ───────────────────
   useEffect(() => {
-    const id = setInterval(() => setBeacons(bs => [...bs]), 10000)
-    return () => clearInterval(id)
-  }, [])
+    if (!lastMessage) return
+    if (lastMessage.type === 'output') {
+      const out: string    = lastMessage.payload?.output ?? ''
+      const isErr: boolean = lastMessage.payload?.isError ?? false
+      setLines(prev => [
+        ...prev,
+        { type: isErr ? 'err' : 'out', text: out },
+        { type: 'info', text: '' },
+      ])
+      setSending(false)
+    }
+    if (lastMessage.type === 'error') {
+      setLines(prev => [
+        ...prev,
+        { type: 'err', text: `[!] Server error: ${lastMessage.payload?.message ?? 'unknown'}` },
+        { type: 'info', text: '' },
+      ])
+      setSending(false)
+    }
+  }, [lastMessage])
+
+  // live ticker
+  useEffect(() => { const id = setInterval(() => setBeacons(bs => [...bs]), 10000); return () => clearInterval(id) }, [])
 
   // auto-scroll
   useEffect(() => { consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [lines])
@@ -357,7 +293,6 @@ export default function Operations() {
   async function sendCommand() {
     const cmd = command.trim()
     if (!cmd || !activeBeacon || sending) return
-
     if (cmd === 'clear') { setLines([]); setCommand(''); return }
 
     setCommand('')
@@ -366,18 +301,15 @@ export default function Operations() {
     setHistIdx(-1)
     setLines(prev => [...prev, { type: 'cmd', text: `beacon> ${cmd}` }])
 
-    // simulate network delay then fake response
-    const { delay, lines: resp } = fakeResponse(cmd, activeBeacon)
-    await new Promise(r => setTimeout(r, delay))
-
-    setLines(prev => [
-      ...prev,
-      { type: 'info', text: `[*] Task queued — awaiting callback…` },
-      ...resp,
-      { type: 'info', text: '' },
-    ])
-    setSending(false)
-    inputRef.current?.focus()
+    if (!connected) {
+      const { delay, lines: resp } = fakeResponse(cmd, activeBeacon)
+      await new Promise(r => setTimeout(r, delay))
+      setLines(prev => [...prev, { type: 'info', text: '[*] (offline) task simulated' }, ...resp, { type: 'info', text: '' }])
+      setSending(false)
+      return
+    }
+    wsSend(cmd, activeBeacon.id)
+    // setSending(false) is called in the lastMessage effect on 'output'/'error'
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -385,32 +317,24 @@ export default function Operations() {
     if (e.key === 'ArrowUp') {
       e.preventDefault()
       const next = Math.min(histIdx + 1, cmdHistory.length - 1)
-      setHistIdx(next)
-      setCommand(cmdHistory[next] ?? '')
+      setHistIdx(next); setCommand(cmdHistory[next] ?? '')
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       const next = histIdx - 1
       if (next < 0) { setHistIdx(-1); setCommand(''); return }
-      setHistIdx(next)
-      setCommand(cmdHistory[next] ?? '')
+      setHistIdx(next); setCommand(cmdHistory[next] ?? '')
     }
     if (e.key === 'Tab') {
       e.preventDefault()
-      // simple prefix autocomplete
       const cmds = ['pwd','whoami','whoami /priv','ps','processbrowser','ipconfig','hostname','getuid','sleep ','shell ','upload ','download ','kill','help','clear']
       const match = cmds.find(c => c.startsWith(command))
       if (match) setCommand(match)
     }
   }
 
-  function prefill(pre: string) {
-    if (!activeBeacon) return
-    setCommand(pre)
-    inputRef.current?.focus()
-  }
+  function prefill(pre: string) { if (!activeBeacon) return; setCommand(pre); inputRef.current?.focus() }
 
-  // ── Shared cell styles
   const TH: React.CSSProperties = {
     padding: '4px 8px', textAlign: 'left', fontSize: 10, fontWeight: 600,
     color: C.dim, background: C.panel, borderBottom: `1px solid ${C.border}`,
@@ -490,9 +414,10 @@ export default function Operations() {
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: C.dim }}>
           sessions: <span style={{ color: C.green, marginRight: 12 }}>{beacons.length}</span>
-          {activeBeacon && (
-            <span style={{ color: C.yellow }}>active: {activeBeacon.hostname}</span>
-          )}
+          {activeBeacon && <span style={{ color: C.yellow }}>active: {activeBeacon.hostname}</span>}
+        </span>
+        <span style={{ fontSize: 11, color: connected ? C.green : C.red, marginLeft: 8 }}>
+          {connected ? '● live' : '○ offline'}
         </span>
       </div>
 
@@ -500,18 +425,10 @@ export default function Operations() {
       <div style={{ height: `${splitPct}%`, overflow: 'auto', flexShrink: 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
           <colgroup>
-            <col style={{ width: 130 }} />
-            <col style={{ width: 50  }} />
-            <col style={{ width: 150 }} />
-            <col style={{ width: 170 }} />
-            <col style={{ width: 110 }} />
-            <col style={{ width: 90  }} />
-            <col style={{ width: 90  }} />
-            <col style={{ width: 60  }} />
-            <col style={{ width: 60  }} />
-            <col style={{ width: 55  }} />
-            <col style={{ width: 50  }} />
-            <col style={{ width: 36  }} />
+            <col style={{ width: 130 }} /><col style={{ width: 50  }} /><col style={{ width: 150 }} />
+            <col style={{ width: 170 }} /><col style={{ width: 110 }} /><col style={{ width: 90  }} />
+            <col style={{ width: 90  }} /><col style={{ width: 60  }} /><col style={{ width: 60  }} />
+            <col style={{ width: 55  }} /><col style={{ width: 50  }} /><col style={{ width: 36  }} />
           </colgroup>
           <thead>
             <tr>
@@ -522,11 +439,7 @@ export default function Operations() {
           </thead>
           <tbody>
             {beacons.length === 0 ? (
-              <tr>
-                <td colSpan={12} style={{ ...TD, textAlign: 'center', padding: '48px 0', color: C.dim }}>
-                  No active sessions
-                </td>
-              </tr>
+              <tr><td colSpan={12} style={{ ...TD, textAlign: 'center', padding: '48px 0', color: C.dim }}>No active sessions</td></tr>
             ) : beacons.map((b, i) => {
               const sel   = activeBeacon?.id === b.id
               const rowBg = sel ? C.rowSel : i % 2 === 0 ? C.rowEven : C.rowOdd
@@ -539,9 +452,7 @@ export default function Operations() {
                   onMouseEnter={e => { if (!sel) e.currentTarget.style.background = C.rowHov }}
                   onMouseLeave={e => { e.currentTarget.style.background = rowBg }}
                 >
-                  <td style={{ ...TD, fontFamily: 'monospace', color: C.mono, fontSize: 10 }}>
-                    {b.id.slice(0, 13)}…
-                  </td>
+                  <td style={{ ...TD, fontFamily: 'monospace', color: C.mono, fontSize: 10 }}>{b.id.slice(0, 13)}…</td>
                   <td style={{ ...TD, textAlign: 'center', padding: '3px 4px' }}>{statusDot(b)}</td>
                   <td style={{ ...TD, color: '#fff', fontWeight: 600 }}>{b.hostname}</td>
                   <td style={{ ...TD, color: C.text }}>{b.username}</td>
@@ -558,10 +469,7 @@ export default function Operations() {
                   <td style={{ ...TD, textAlign: 'center', padding: '0 4px', borderRight: 'none' }}>
                     <button onClick={e => { e.stopPropagation(); killSession(b) }}
                       title="Kill session"
-                      style={{
-                        background: 'transparent', border: 'none', color: C.red,
-                        cursor: 'pointer', fontSize: 13, padding: '1px 5px', borderRadius: 2, opacity: 0.4,
-                      }}
+                      style={{ background: 'transparent', border: 'none', color: C.red, cursor: 'pointer', fontSize: 13, padding: '1px 5px', borderRadius: 2, opacity: 0.4 }}
                       onMouseEnter={e => { e.currentTarget.style.opacity='1'; e.currentTarget.style.background='#3a1212' }}
                       onMouseLeave={e => { e.currentTarget.style.opacity='0.4'; e.currentTarget.style.background='transparent' }}
                     >✕</button>
@@ -584,7 +492,6 @@ export default function Operations() {
       {/* ── Console pane ──────────────────────────────────────── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
 
-        {/* Console header */}
         <div style={{
           padding: '4px 12px', background: C.panel, borderBottom: `1px solid ${C.border}`,
           fontSize: 11, color: C.dim, flexShrink: 0,
@@ -612,7 +519,6 @@ export default function Operations() {
           </button>
         </div>
 
-        {/* Output area */}
         <div
           style={{ flex: 1, overflowY: 'auto', padding: '8px 12px', fontSize: 12, lineHeight: 1.65 }}
           onClick={() => inputRef.current?.focus()}
@@ -633,7 +539,6 @@ export default function Operations() {
           <div ref={consoleEndRef} />
         </div>
 
-        {/* Input bar */}
         <div style={{
           display: 'flex', alignItems: 'center', padding: '5px 12px',
           borderTop: `1px solid ${C.border}`, background: C.panel, gap: 8, flexShrink: 0,
@@ -648,10 +553,7 @@ export default function Operations() {
             onKeyDown={handleKeyDown}
             disabled={!activeBeacon || sending}
             placeholder={activeBeacon ? 'enter command… (help for list)' : 'select a session above'}
-            style={{
-              flex: 1, background: 'transparent', border: 'none', outline: 'none',
-              color: C.yellow, fontSize: 12, fontFamily: 'monospace', caretColor: C.yellow,
-            }}
+            style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: C.yellow, fontSize: 12, fontFamily: 'monospace', caretColor: C.yellow }}
           />
           {sending && <span style={{ color: C.dim, fontSize: 11, animation: 'none' }}>…</span>}
           <button onClick={sendCommand}
@@ -687,11 +589,7 @@ export default function Operations() {
                     setCtxMenu(null)
                     setTimeout(() => inputRef.current?.focus(), 50)
                   }}
-                  style={{
-                    padding: '6px 14px', fontSize: 12, cursor: 'pointer',
-                    color: item.danger ? C.red : C.text,
-                    display: 'flex', alignItems: 'center', gap: 8,
-                  }}
+                  style={{ padding: '6px 14px', fontSize: 12, cursor: 'pointer', color: item.danger ? C.red : C.text, display: 'flex', alignItems: 'center', gap: 8 }}
                   onMouseEnter={e => { e.currentTarget.style.background = item.danger ? '#3a1212' : C.rowSel }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
                 >

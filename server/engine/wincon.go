@@ -31,23 +31,23 @@ func (e *Evaluator) Check(lastCmd schema.ParsedCommand, lastResult schema.ToolRe
 
 	completed := make(map[string]bool, len(e.state.CompletedObjectives))
 	for _, obj := range e.state.CompletedObjectives {
-		completed[obj.Label] = true
+		completed[obj.ID] = true
 	}
 
 	m := matcher.NewMatcher(nil, 0) // command_executed: exact+wildcard only
 
 	for _, wc := range e.lab.WinConditions {
-		if completed[wc.Label] {
+		if completed[wc.ID] {
 			continue
 		}
 		if e.evaluate(wc, lastCmd, lastResult, m) {
 			e.state.CompletedObjectives = append(e.state.CompletedObjectives, schema.CompletedObjective{
-				Label:       wc.Label,
+				ID:          wc.ID,
 				CompletedAt: time.Now().UTC(),
 			})
 			events = append(events, schema.PushEvent{
 				Type:    "objective_complete",
-				Payload: fmt.Sprintf("[*] Objective complete: %s", wc.Label),
+				Payload: fmt.Sprintf("[*] Objective complete: %s", wc.ID),
 			})
 		}
 	}
@@ -81,15 +81,15 @@ func (e *Evaluator) evaluate(wc schema.WinCondition, cmd schema.ParsedCommand, r
 // checkCommandExecuted matches lastCmd.Binary + lastCmd.Subcommand against
 // WinCondition.Match using the shared matcher (exact → wildcard → fuzzy).
 func (e *Evaluator) checkCommandExecuted(wc schema.WinCondition, cmd schema.ParsedCommand, m *matcher.Matcher) bool {
-	parts := []string{cmd.Binary}
+	parts := []string{cmd.Executable}
 	if cmd.Subcommand != "" {
 		parts = append(parts, cmd.Subcommand)
 	}
 	parts = append(parts, cmd.Args...)
 	subject := strings.TrimSpace(strings.Join(parts, " "))
-	m.AddPattern(wc.Match)
-	if wc.Match == "" {
-		m.AddPattern(wc.Value)
+	m.AddPattern(wc.Params["match"])
+	if wc.Params["match"] == "" {
+		m.AddPattern(wc.Params["value"])
 	}
 	result := m.Match(subject)
 	return result.Level != matcher.MatchNone
@@ -98,50 +98,41 @@ func (e *Evaluator) checkCommandExecuted(wc schema.WinCondition, cmd schema.Pars
 // checkState resolves WinCondition.Key as a dot-path into SessionState and
 // compares the result to WinCondition.Value (case-insensitive).
 func (e *Evaluator) checkState(wc schema.WinCondition) bool {
-	val, ok := resolveStatePath(e.state, wc.Key)
+	val, ok := resolveStatePath(e.state, wc.Params["key"])
 	if !ok {
 		return false
 	}
-	return strings.EqualFold(val, wc.Value)
+	return strings.EqualFold(val, wc.Params["value"])
 }
 
-// checkLoot checks whether a loot map path (ntlm_hashes.<user>, etc.) exists
-// and is non-empty.
+// checkLoot checks whether the loot slice contains an entry matching
+// WinCondition.Params (loot_type and loot_value_contains).
 func (e *Evaluator) checkLoot(wc schema.WinCondition) bool {
-	parts := strings.SplitN(wc.Key, ".", 2)
-	if len(parts) != 2 {
-		return false
+	wantType := wc.Params["loot_type"]
+	wantContains := wc.Params["loot_value_contains"]
+	for _, l := range e.state.Loot {
+		if wantType != "" && !strings.EqualFold(l.Type, wantType) {
+			continue
+		}
+		if wantContains != "" && !strings.Contains(strings.ToLower(l.Value+l.Source), strings.ToLower(wantContains)) {
+			continue
+		}
+		return true
 	}
-	category, key := parts[0], parts[1]
-	switch category {
-	case "ntlm_hashes":
-		v, ok := e.state.Loot.NTLMHashes[key]
-		return ok && v != ""
-	case "spn_hashes":
-		v, ok := e.state.Loot.SPNHashes[key]
-		return ok && v != ""
-	case "pfx_certs":
-		v, ok := e.state.Loot.PFXCerts[key]
-		return ok && v != ""
-	case "plaintext_creds":
-		v, ok := e.state.Loot.PlaintextCreds[key]
-		return ok && v != ""
-	default:
-		return false
-	}
+	return false
 }
 
 // checkFileRead is satisfied when lastCmd was a cat/type command whose first
 // argument matches WinCondition.Match (case-insensitive path comparison).
 func (e *Evaluator) checkFileRead(wc schema.WinCondition, cmd schema.ParsedCommand) bool {
-	if cmd.Binary != "cat" && cmd.Binary != "type" {
+	if cmd.Executable != "cat" && cmd.Executable != "type" {
 		return false
 	}
 	if len(cmd.Args) == 0 {
 		return false
 	}
 	target := normalizePath(cmd.Args[0])
-	want := normalizePath(wc.Match)
+	want := normalizePath(wc.Params["match"])
 	return strings.EqualFold(target, want)
 }
 
@@ -164,10 +155,10 @@ func normalizePath(p string) string {
 //	loot.plaintext_creds.<user>   → state.Loot.PlaintextCreds[user]
 func resolveStatePath(state *schema.SessionState, path string) (string, bool) {
 	switch path {
-	case "user":
-		return state.User, state.User != ""
-	case "hostname":
-		return state.Hostname, state.Hostname != ""
+	case "user", "active_user":
+		return state.ActiveUser, state.ActiveUser != ""
+	case "hostname", "active_host":
+		return state.ActiveHost, state.ActiveHost != ""
 	case "cwd":
 		return state.CWD, state.CWD != ""
 	}
@@ -175,19 +166,10 @@ func resolveStatePath(state *schema.SessionState, path string) (string, bool) {
 	parts := strings.SplitN(path, ".", 3)
 	if len(parts) == 3 && parts[0] == "loot" {
 		category, key := parts[1], parts[2]
-		switch category {
-		case "ntlm_hashes":
-			v, ok := state.Loot.NTLMHashes[key]
-			return v, ok && v != ""
-		case "spn_hashes":
-			v, ok := state.Loot.SPNHashes[key]
-			return v, ok && v != ""
-		case "pfx_certs":
-			v, ok := state.Loot.PFXCerts[key]
-			return v, ok && v != ""
-		case "plaintext_creds":
-			v, ok := state.Loot.PlaintextCreds[key]
-			return v, ok && v != ""
+		for _, l := range state.Loot {
+			if strings.EqualFold(l.Type, category) && strings.EqualFold(l.Source, key) {
+				return l.Value, l.Value != ""
+			}
 		}
 	}
 
@@ -198,10 +180,10 @@ func resolveStatePath(state *schema.SessionState, path string) (string, bool) {
 func (e *Evaluator) allComplete() bool {
 	completed := make(map[string]bool, len(e.state.CompletedObjectives))
 	for _, obj := range e.state.CompletedObjectives {
-		completed[obj.Label] = true
+		completed[obj.ID] = true
 	}
 	for _, wc := range e.lab.WinConditions {
-		if !completed[wc.Label] {
+		if !completed[wc.ID] {
 			return false
 		}
 	}
@@ -215,7 +197,7 @@ func (e *Evaluator) labCompletePayload() string {
 	sb.WriteString("[+] Lab complete! All objectives achieved.\n\n")
 	for _, obj := range e.state.CompletedObjectives {
 		sb.WriteString(fmt.Sprintf("  [*] %-40s  %s\n",
-			obj.Label,
+			obj.ID,
 			obj.CompletedAt.Format("2006-01-02 15:04:05 UTC"),
 		))
 	}

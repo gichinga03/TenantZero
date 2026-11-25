@@ -101,7 +101,7 @@ func (i *Impacket) secretsdump(
 	var effects []schema.SideEffect
 
 	// SAM dump.
-	localAccounts := append([]string{"Administrator"}, computer.LocalAdmins...)
+	localAccounts := []string{"Administrator"}
 	seen := map[string]bool{}
 	for _, acct := range localAccounts {
 		if seen[acct] {
@@ -115,30 +115,32 @@ func (i *Impacket) secretsdump(
 			hash,
 		)
 		effects = append(effects, schema.SideEffect{
-			Type:  schema.SideEffectSetLoot,
-			Key:   fmt.Sprintf("ntlm_hashes.%s\\%s", domain, acct),
-			Value: hash,
+			Type:       schema.SideEffectTypeLoot,
+			LootType:   "hash",
+			LootValue:  hash,
+			LootSource: fmt.Sprintf("ntlm_hashes.%s\\%s", domain, acct),
 		})
 	}
 
 	// NTDS / DC dump.
-	if computer.Roles[0] == "DomainController" {
+	if strings.EqualFold(computer.Role, "domain_controller") {
 		sb.WriteString("\n[*] Dumping Domain Credentials (domain\\uid:rid:lmhash:nthash)\n")
 		sb.WriteString("[*] Using the DRSUAPI method to get NTDS.DIT secrets\n")
 		users := provider.GetUsers()
 		for _, u := range users {
-			hash := fnvNTLM(u.Username + "@" + fqdn)
-			rid := fnvRID(u.Username)
+			hash := fnvNTLM(u.SAMAccountName + "@" + fqdn)
+			rid := fnvRID(u.SAMAccountName)
 			fmt.Fprintf(&sb, "%s\\%s:%d:%s:%s:::\n",
-				domain, u.Username,
+				domain, u.SAMAccountName,
 				rid,
 				"aad3b435b51404eeaad3b435b51404ee",
 				hash,
 			)
 			effects = append(effects, schema.SideEffect{
-				Type:  schema.SideEffectSetLoot,
-				Key:   fmt.Sprintf("ntlm_hashes.%s\\%s", domain, u.Username),
-				Value: hash,
+				Type:       schema.SideEffectTypeLoot,
+				LootType:   "hash",
+				LootValue:  hash,
+				LootSource: fmt.Sprintf("ntlm_hashes.%s\\%s", domain, u.SAMAccountName),
 			})
 		}
 		// Always include krbtgt.
@@ -149,16 +151,17 @@ func (i *Impacket) secretsdump(
 			krbtgtHash,
 		)
 		effects = append(effects, schema.SideEffect{
-			Type:  schema.SideEffectSetLoot,
-			Key:   "ntlm_hashes.krbtgt",
-			Value: krbtgtHash,
+			Type:       schema.SideEffectTypeLoot,
+			LootType:   "hash",
+			LootValue:  krbtgtHash,
+			LootSource: "ntlm_hashes.krbtgt",
 		})
 	}
 
 	sb.WriteString("\n[*] Cleaning up...\n")
 	sb.WriteString("[*] Stopping service RemoteRegistry\n")
 
-	return schema.ToolResult{Output: sb.String(), SideEffects: effects}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
 // psexec simulates psexec.py remote shell execution.
@@ -220,11 +223,11 @@ func (i *Impacket) psexec(
 	fmt.Fprintf(&sb, "C:\\Windows\\system32>")
 
 	effects := []schema.SideEffect{
-		{Type: schema.SideEffectSetSessionMachine, Value: computer.Hostname},
-		{Type: schema.SideEffectSetSessionUser, Value: landAs},
+		{Type: schema.SideEffectTypePivotContext, PivotHost: computer.Hostname, PivotIdentity: landAs},
+		{Type: schema.SideEffectTypeSetSessionUser, NewUser: landAs},
 	}
 
-	return schema.ToolResult{Output: sb.String(), SideEffects: effects}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
 // wmiexec simulates wmiexec.py remote command execution.
@@ -272,11 +275,11 @@ func (i *Impacket) wmiexec(
 	fmt.Fprintf(&sb, "C:\\>")
 
 	effects := []schema.SideEffect{
-		{Type: schema.SideEffectSetSessionMachine, Value: computer.Hostname},
-		{Type: schema.SideEffectSetSessionUser, Value: creds.user},
+		{Type: schema.SideEffectTypePivotContext, PivotHost: computer.Hostname, PivotIdentity: creds.user},
+		{Type: schema.SideEffectTypeSetSessionUser, NewUser: creds.user},
 	}
 
-	return schema.ToolResult{Output: sb.String(), SideEffects: effects}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
 // getUserSPNs simulates GetUserSPNs.py Kerberoasting.
@@ -323,26 +326,27 @@ func (i *Impacket) getUserSPNs(
 
 	for _, u := range spnUsers {
 		fmt.Fprintf(&sb, "%-36s %-10s           %s  <never>\n",
-			u.SPN, u.Username,
+			u.SPNs, u.SAMAccountName,
 			time.Now().Add(-30*24*time.Hour).Format("2006-01-02 15:04:05.999999"),
 		)
-		spn := ""; if len(u.SPN) > 0 { spn = u.SPN[0] }
-		hash := kerberoastHash(u.Username, domain, spn, fnvNTLM(u.Username+domain))
+		spn := ""; if len(u.SPNs) > 0 { spn = u.SPNs[0] }
+		hash := kerberoastHash(u.SAMAccountName, domain, spn, fnvNTLM(u.SAMAccountName+domain))
 		effects = append(effects, schema.SideEffect{
-			Type:  schema.SideEffectSetLoot,
-			Key:   "spn_hashes." + u.Username,
-			Value: hash,
+			Type:       schema.SideEffectTypeLoot,
+			LootType:   "spn_hash",
+			LootValue:  hash,
+			LootSource: "spn_hashes." + u.SAMAccountName,
 		})
 	}
 
 	sb.WriteString("\n")
 	for _, u := range spnUsers {
-		spn := ""; if len(u.SPN) > 0 { spn = u.SPN[0] }
-		hash := kerberoastHash(u.Username, domain, spn, fnvNTLM(u.Username+domain))
+		spn := ""; if len(u.SPNs) > 0 { spn = u.SPNs[0] }
+		hash := kerberoastHash(u.SAMAccountName, domain, spn, fnvNTLM(u.SAMAccountName+domain))
 		sb.WriteString(hash + "\n")
 	}
 
-	return schema.ToolResult{Output: sb.String(), SideEffects: effects}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
 // kerberoastHash returns a fake $krb5tgs$23$ hash seeded from username+domain.
@@ -375,8 +379,14 @@ func (i *Impacket) ticketer(
 		}
 	}
 
-	expectedHash, hasKrbtgt := state.Loot.NTLMHashes["krbtgt"]
-	if hasKrbtgt && !strings.EqualFold(expectedHash, nthash) {
+	krbtgtHash := ""
+	for _, l := range state.Loot {
+		if l.Type == "hash" && strings.Contains(strings.ToLower(l.Source), "krbtgt") {
+			krbtgtHash = l.Value
+			break
+		}
+	}
+	if krbtgtHash != "" && !strings.EqualFold(krbtgtHash, nthash) {
 		return schema.ToolResult{
 			Output: "[-] Got error while trying to validate credentials and target: Kerberos SessionError: KRB_AP_ERR_MODIFIED\n",
 		}
@@ -389,10 +399,15 @@ func (i *Impacket) ticketer(
 	fmt.Fprintf(&sb, "[*] Saving ticket in %s.ccache\n", username)
 
 	effects := []schema.SideEffect{
-		{Type: schema.SideEffectAddTicket, Value: "ticket"},
+		{
+			Type:       schema.SideEffectTypeTicket,
+			TicketType: "TGT",
+			Identity:   username,
+			Target:     domain,
+		},
 	}
 
-	return schema.ToolResult{Output: sb.String(), SideEffects: effects}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
 // impacketCreds holds parsed credential components.

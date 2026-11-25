@@ -28,13 +28,13 @@ func (c *CrackMapExec) Execute(
 	state *schema.SessionState,
 	provider providers.Provider,
 ) schema.ToolResult {
-	if len(cmd.Args) < 2 {
+	if cmd.Subcommand == "" || len(cmd.Args) == 0 {
 		return schema.ToolResult{Output: cmeUsage()}
 	}
 
-	protocol := strings.ToLower(cmd.Args[0])
-	target := cmd.Args[1]
-	flags := parseCMEFlags(cmd.Args[2:])
+	protocol := strings.ToLower(cmd.Subcommand)
+	target := cmd.Args[0]
+	flags := cmd.Flags
 
 	switch protocol {
 	case "smb":
@@ -139,8 +139,8 @@ func (c *CrackMapExec) smb(
 		if isShellSpawn(execCmd) {
 			return schema.ToolResult{
 				Output: sb.String(),
-				SideEffects: []schema.SideEffect{
-					{Type: schema.SideEffectSetSessionMachine, Value: hostname},
+				Effects: []schema.SideEffect{
+					{Type: schema.SideEffectTypePivotContext, PivotHost: hostname, PivotIdentity: user},
 				},
 			}
 		}
@@ -184,30 +184,30 @@ func (c *CrackMapExec) winrm(
 	}
 
 	effects := []schema.SideEffect{
-		{Type: schema.SideEffectSetSessionMachine, Value: hostname},
-		{Type: schema.SideEffectSetSessionUser, Value: user},
+		{Type: schema.SideEffectTypePivotContext, PivotHost: hostname, PivotIdentity: user},
+		{Type: schema.SideEffectTypeSetSessionUser, NewUser: user},
 	}
 
 	return schema.ToolResult{
 		Output: fmt.Sprintf("WINRM       %-15s 5985   %-15s     [+] %s\\%s:%s (Pwn3d!)\n",
 			ip, hostname, domain, user, pass),
-		SideEffects: effects,
+		Effects: effects,
 	}
 }
 
-// resolveTarget looks up a computer by hostname or IP.
-func resolveTarget(target string, provider providers.Provider) (schema.Computer, bool) {
-	c, ok := provider.GetComputer(target)
+// resolveTarget looks up a host by hostname or IP.
+func resolveTarget(target string, provider providers.Provider) (schema.Host, bool) {
+	h, ok := provider.GetHost(target)
 	if ok {
-		return c, true
+		return h, true
 	}
 	// Try IP lookup.
-	for _, comp := range providers.GetAllComputers(provider) {
-		if comp.IP == target {
-			return comp, true
+	for _, host := range provider.GetAllHosts() {
+		if host.IP == target {
+			return host, true
 		}
 	}
-	return schema.Computer{}, false
+	return schema.Host{}, false
 }
 
 // cmeShareTable formats a share listing in CME style.
@@ -248,31 +248,7 @@ func isShellSpawn(cmd string) bool {
 	return false
 }
 
-// parseCMEFlags extracts -flag value and --flag pairs from args.
-func parseCMEFlags(args []string) map[string]string {
-	flags := make(map[string]string)
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if strings.HasPrefix(a, "--") {
-			key := strings.TrimPrefix(a, "--")
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				flags[key] = args[i+1]
-				i++
-			} else {
-				flags[a] = "true" // boolean flag
-			}
-		} else if strings.HasPrefix(a, "-") {
-			key := strings.TrimPrefix(a, "-")
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				flags[key] = args[i+1]
-				i++
-			} else {
-				flags[key] = "true"
-			}
-		}
-	}
-	return flags
-}
+
 
 func cmeUsage() string {
 	return `usage: crackmapexec [-h] [-t THREADS] [--timeout TIMEOUT] [--jitter INTERVAL]

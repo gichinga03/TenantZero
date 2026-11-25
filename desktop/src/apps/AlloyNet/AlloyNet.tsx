@@ -13,11 +13,15 @@ const C = {
 }
 
 const TABS = [
-  { id: 'operations', label: 'Operations',  icon: '⬡' },
-  { id: 'beacongen',  label: 'Beacon Gen',  icon: '⚡' },
+  { id: 'operations', label: 'Operations', icon: '⬡' },
+  { id: 'beacongen',  label: 'Beacon Gen', icon: '⚡' },
 ]
 
-export default function AlloyNet() {
+interface AlloyNetProps {
+  token?: string
+}
+
+export default function AlloyNet({ token = '' }: AlloyNetProps) {
   const [activeTab, setActiveTab] = useState('operations')
 
   return (
@@ -45,8 +49,7 @@ export default function AlloyNet() {
                 padding: '5px 14px 4px', fontSize: 12, cursor: 'default',
                 color: active ? '#ffffff' : C.dim,
                 borderBottom: active ? `2px solid ${C.blue}` : '2px solid transparent',
-                marginRight: 2,
-                userSelect: 'none',
+                marginRight: 2, userSelect: 'none',
               }}
               onMouseEnter={e => { if (!active) e.currentTarget.style.color = C.text }}
               onMouseLeave={e => { if (!active) e.currentTarget.style.color = C.dim }}
@@ -60,7 +63,7 @@ export default function AlloyNet() {
 
       {/* ── Tab content ─────────────────────────────────────── */}
       <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
-        {activeTab === 'operations' && <Operations />}
+        {activeTab === 'operations' && <Operations token={token} />}
         {activeTab === 'beacongen'  && <BeaconGen />}
       </div>
     </div>

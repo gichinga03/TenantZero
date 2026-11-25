@@ -1,150 +1,205 @@
 package engine
 
 import (
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/0x4D67/tenantzero/shared/schema"
 	"github.com/0x4D67/tenantzero/server/engine/providers"
 	"github.com/0x4D67/tenantzero/server/engine/tools"
+	"github.com/0x4D67/tenantzero/shared/schema"
 )
 
-// Session is the runtime container for a single student lab run. It wires
-// together immutable lab data, mutable session state, the AD/Azure provider,
-// and the tool registry.
 type Session struct {
-	ID         string
-	Lab        *schema.Lab
-	Engagement *schema.Engagement
-	State      *schema.SessionState
-	Provider   providers.Provider
-	Registry   *tools.Registry
+	ID        string
+	Lab       schema.Lab
+	State     schema.SessionState
+	StartedAt time.Time
+	Registry  *tools.Registry
+	Provider  providers.Provider
 }
 
-// NewSession constructs a Session. The caller is responsible for supplying a
-// correctly initialised state (via InitState) and a fully populated registry.
-func NewSession(
-	lab *schema.Lab,
-	eng *schema.Engagement,
-	state *schema.SessionState,
-	provider providers.Provider,
-	registry *tools.Registry,
-) *Session {
+func NewSession(lab schema.Lab, userID string) *Session {
+	idBytes := make([]byte, 16)
+	if _, err := rand.Read(idBytes); err != nil {
+		panic(err)
+	}
+	sessionID := hex.EncodeToString(idBytes)
+
+	now := time.Now()
+
 	return &Session{
-		ID:         state.ID,
-		Lab:        lab,
-		Engagement: eng,
-		State:      state,
-		Provider:   provider,
-		Registry:   registry,
+		ID:        sessionID,
+		Lab:       lab,
+		StartedAt: now,
+		State: schema.SessionState{
+			LabID:               lab.LabID,
+			UserID:              userID,
+			ActiveHost:          lab.StartingPoint.Machine,
+			ActiveUser:          lab.StartingPoint.User,
+			ActiveBeaconID:      "",
+			CWD:                 `C:\Users\` + lab.StartingPoint.User,
+			BeaconTree:          []schema.Beacon{},
+			GrantedACLs:         map[string][]string{},
+			Loot:                []schema.Loot{},
+			Tickets:             []schema.Ticket{},
+			Tokens:              []schema.Token{},
+			CompletedObjectives: []schema.CompletedObjective{},
+			Journal:             []schema.JournalEntry{},
+			UsedHints:           []string{},
+			StartedAt:           now,
+			LastActivityAt:      now,
+		},
 	}
 }
 
-// Apply processes every SideEffect in result against session state. Tools are
-// stateless; Apply is the single write path for all state mutations.
-func (s *Session) Apply(result schema.ToolResult) {
-	for _, se := range result.SideEffects {
-		s.applySideEffect(se)
+func (s *Session) ApplySideEffects(effects []schema.SideEffect) {
+	for _, e := range effects {
+		s.applySideEffect(e)
 	}
 }
 
-func (s *Session) applySideEffect(se schema.SideEffect) {
-	switch se.Type {
-	case schema.SideEffectSetLoot:
-		// Key format: "category.username"
-		// Categories: ntlm, password, certificate
-		parts := strings.SplitN(se.Key, ".", 2)
-		if len(parts) != 2 {
-			return
+func (s *Session) applySideEffect(e schema.SideEffect) {
+	switch e.Type {
+
+	case schema.SideEffectTypeLoot:
+		s.State.Loot = append(s.State.Loot, schema.Loot{
+			Type:       e.LootType,
+			Value:      e.LootValue,
+			Source:     e.LootSource,
+			CapturedAt: time.Now(),
+		})
+
+	case schema.SideEffectTypeTicket:
+		s.State.Tickets = append(s.State.Tickets, schema.Ticket{
+			TicketType: e.TicketType,
+			Identity:   e.Identity,
+			Target:     e.Target,
+			B64:        e.TicketB64,
+			IssuedAt:   time.Now(),
+			ExpiresAt:  time.Now().Add(10 * time.Hour),
+		})
+
+	case schema.SideEffectTypeSetSessionUser:
+		s.State.ActiveUser = e.NewUser
+
+	case schema.SideEffectTypeAddToken:
+		s.State.Tokens = append(s.State.Tokens, schema.Token{
+			Username: e.TokenUsername,
+			Domain:   e.TokenDomain,
+			Fake:     e.TokenFake,
+			IssuedAt: time.Now(),
+		})
+
+	case schema.SideEffectTypeCompleteObj:
+		for _, c := range s.State.CompletedObjectives {
+			if c.ID == e.ObjectiveID {
+				return
+			}
 		}
-		category, username := parts[0], parts[1]
-		switch category {
-		case "ntlm":
-			s.State.Loot.NTLMHashes[username] = se.Value
-		case "plaintext":
-			s.State.Loot.PlaintextCreds[username] = se.Value
-		case "pfx":
-			s.State.Loot.PFXCerts[username] = se.Value
-		}
+		s.State.CompletedObjectives = append(s.State.CompletedObjectives, schema.CompletedObjective{
+			ID:          e.ObjectiveID,
+			CompletedAt: time.Now(),
+		})
 
-	case schema.SideEffectSetSessionUser:
-		s.State.User = se.Value
-
-	case schema.SideEffectSetSessionMachine:
-		s.State.Hostname = se.Value
-		s.State.CWD = `C:\`
-
-	case schema.SideEffectAddTicket:
-		var t schema.Ticket
-		if err := json.Unmarshal([]byte(se.Value), &t); err != nil {
-			return
-		}
-		s.State.Tickets = append(s.State.Tickets, t)
-
-	case schema.SideEffectAddToken:
-		var tok schema.Token
-		if err := json.Unmarshal([]byte(se.Value), &tok); err != nil {
-			return
-		}
-		s.State.Tokens = append(s.State.Tokens, tok)
-
-	case "acl_granted":
+	case schema.SideEffectTypeGrantACL:
 		if s.State.GrantedACLs == nil {
-			s.State.GrantedACLs = make(map[string]string)
+			s.State.GrantedACLs = map[string][]string{}
 		}
-		s.State.GrantedACLs[strings.ToLower(se.Key)] = se.Value
+		key := e.Principal + "." + e.ACLTarget
+		for _, existing := range s.State.GrantedACLs[key] {
+			if existing == e.ACLRight {
+				return
+			}
+		}
+		s.State.GrantedACLs[key] = append(s.State.GrantedACLs[key], e.ACLRight)
 
-	case schema.SideEffectSetCWD:
-		// Filesystem.Cd already validated the path; Apply just stores it.
-		s.State.CWD = se.Value
+	case schema.SideEffectTypeSpawnBeacon:
+		newID := randomHex(8)
+		beacon := schema.Beacon{
+			ID:          newID,
+			ParentID:    e.BeaconParentID,
+			Host:        e.BeaconHost,
+			Identity:    e.BeaconIdentity,
+			Active:      true,
+			CheckedInAt: time.Now(),
+			Tasks:       []schema.Task{},
+		}
+		s.State.BeaconTree = append(s.State.BeaconTree, beacon)
+		s.State.ActiveBeaconID = newID
+
+	case schema.SideEffectTypePivotContext:
+		s.State.ActiveHost = e.PivotHost
+		s.State.ActiveUser = e.PivotIdentity
+
+	case schema.SideEffectTypeScopeViolation:
+		_ = fmt.Sprintf("scope violation attempted: %s", e.ViolationHost)
 	}
 }
 
-// CheckTimeouts returns a PushEvent if the overall session has exceeded
-// lab.TimeConfig.SessionTimeoutMinutes, or if any active token has exceeded
-// lab.TimeConfig.TokenTTLMinutes. Returns nil when all timers are within bounds.
-//
-// Called by the WebSocket handler on every inbound command before dispatch.
-func (s *Session) CheckTimeouts() *schema.PushEvent {
-	cfg := s.Lab.Time
-	now := time.Now().UTC()
-
-	if cfg.SessionTimeout > 0 {
-		deadline := s.State.StartedAt.Add(
-			time.Duration(cfg.SessionTimeout) * time.Minute,
-		)
-		if now.After(deadline) {
-			return &schema.PushEvent{
-				Type:    "session_timeout",
-				Payload: fmt.Sprintf("Session expired after %d minutes.", cfg.SessionTimeout),
-			}
+func (s *Session) ActiveBeacon() (schema.Beacon, bool) {
+	if s.State.ActiveBeaconID == "" {
+		return schema.Beacon{}, false
+	}
+	for _, b := range s.State.BeaconTree {
+		if b.ID == s.State.ActiveBeaconID {
+			return b, true
 		}
 	}
-
-	if cfg.TokenTTL > 0 {
-		ttl := time.Duration(cfg.TokenTTL) * time.Minute
-		for _, tok := range s.State.Tokens {
-			if now.After(tok.AcquiredAt.Add(ttl)) {
-				return &schema.PushEvent{
-					Type:    "token_expired",
-					Payload: fmt.Sprintf("Token for %s has expired (TTL %d min).", tok.User, cfg.TokenTTL),
-				}
-			}
-		}
-	}
-
-	return nil
+	return schema.Beacon{}, false
 }
 
-// AppendJournal adds a timestamped, auto-sequenced entry to state.Journal.
-func (s *Session) AppendJournal(input, output string) {
-	seq := len(s.State.Journal) + 1
+func (s *Session) HasRuntimeACL(principal, target, right string) bool {
+	key := principal + "." + target
+	rights, ok := s.State.GrantedACLs[key]
+	if !ok {
+		return false
+	}
+	for _, r := range rights {
+		if r == right {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Session) AppendTask(beaconID, input, output string) {
+	for i, b := range s.State.BeaconTree {
+		if b.ID == beaconID {
+			task := schema.Task{
+				ID:          randomHex(4),
+				Input:       input,
+				Output:      output,
+				IssuedAt:    time.Now(),
+				CompletedAt: time.Now(),
+				Status:      "complete",
+			}
+			s.State.BeaconTree[i].Tasks = append(s.State.BeaconTree[i].Tasks, task)
+			return
+		}
+	}
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
+
+func (s *Session) CheckTimeouts() bool {
+	return time.Since(s.State.LastActivityAt) > time.Duration(s.Lab.Time.SessionTimeoutMinutes)*time.Minute
+}
+
+func (s *Session) AppendJournal(raw, output string) {
 	s.State.Journal = append(s.State.Journal, schema.JournalEntry{
-		Sequence:  seq,
-		Timestamp: time.Now().UTC(),
-		Input:     input,
+		Timestamp: time.Now(),
+		Host:      s.State.ActiveHost,
+		Identity:  s.State.ActiveUser,
+		RawInput:  raw,
 		Output:    output,
 	})
+	s.State.LastActivityAt = time.Now()
 }

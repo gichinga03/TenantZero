@@ -98,7 +98,7 @@ func (m *Mimikatz) sekurlsaLogonPasswords(
 	state *schema.SessionState,
 	provider providers.Provider,
 ) schema.ToolResult {
-	if !provider.HasLocalAdmin(state.User, state.Hostname) {
+	if !provider.HasLocalAdmin(state.ActiveUser, state.ActiveHost) {
 		return schema.ToolResult{
 			Output: "ERROR kuhl_m_sekurlsa_acquireLSA ; Handle on memory (0x00000005)",
 		}
@@ -120,31 +120,26 @@ func (m *Mimikatz) sekurlsaLogonPasswords(
 
 	var entries []credEntry
 
-	// Pull plaintext creds from loot.
-	for user, pass := range state.Loot.PlaintextCreds {
-		domain := providers.NetBIOSName(providers.GetDomain(provider))
-		if domain == "" {
-			domain = providers.GetDomain(provider)
-		}
-		entries = append(entries, credEntry{
-			username: user,
-			domain:   domain,
-			password: pass,
-			ntlm:     fnvNTLM(pass),
-		})
-	}
-
-	// Pull NTLM-only entries from loot (skip those already in plaintext).
-	for user, hash := range state.Loot.NTLMHashes {
-		if _, already := state.Loot.PlaintextCreds[user]; already {
+	// Pull creds from loot slice.
+	netbios := providers.NetBIOSName(providers.GetDomain(provider))
+	seenUser := map[string]bool{}
+	for _, l := range state.Loot {
+		if l.Type != "hash" && l.Type != "plaintext" {
 			continue
 		}
-		domain := providers.NetBIOSName(providers.GetDomain(provider))
-		entries = append(entries, credEntry{
-			username: user,
-			domain:   domain,
-			ntlm:     hash,
-		})
+		uname := l.Source
+		if seenUser[uname] {
+			continue
+		}
+		seenUser[uname] = true
+		e := credEntry{username: uname, domain: netbios}
+		if l.Type == "plaintext" {
+			e.password = l.Value
+			e.ntlm = fnvNTLM(l.Value)
+		} else {
+			e.ntlm = l.Value
+		}
+		entries = append(entries, e)
 	}
 
 	// If nothing looted, emit a generic SYSTEM-only block so the machine
@@ -217,14 +212,19 @@ func (m *Mimikatz) lsadumpDcsync(
 	// Check runtime-granted DCSync rights (via Add-DomainObjectAcl) first.
 	hasDCSync := false
 	if state.GrantedACLs != nil {
-		for k, v := range state.GrantedACLs {
-			if strings.HasPrefix(k, strings.ToLower(state.User)+".") && strings.EqualFold(v, "DCSync") {
-				hasDCSync = true
-				break
+		for k, rights := range state.GrantedACLs {
+			if !strings.HasPrefix(k, strings.ToLower(state.ActiveUser)+".") {
+				continue
+			}
+			for _, r := range rights {
+				if strings.EqualFold(r, "DCSync") {
+					hasDCSync = true
+					break
+				}
 			}
 		}
 	}
-	if !hasDCSync && !provider.HasReplicationRights(state.User) && !provider.HasDomainAdmin(state.User) {
+	if !hasDCSync && !provider.HasReplicationRights(state.ActiveUser) && !provider.HasDomainAdmin(state.ActiveUser) {
 		return schema.ToolResult{
 			Output: "ERROR kuhl_m_lsadump_dcsync ; GetNCChanges: 0x00002105 (ERROR_DS_DRA_ACCESS_DENIED)",
 		}
@@ -275,13 +275,14 @@ func (m *Mimikatz) lsadumpDcsync(
 
 	effects := []schema.SideEffect{
 		{
-			Type:  schema.SideEffectSetLoot,
-			Key:   "ntlm_hashes." + targetUser,
-			Value: hash,
+			Type:       schema.SideEffectTypeLoot,
+			LootType:   "hash",
+			LootValue:  hash,
+			LootSource: "ntlm_hashes." + targetUser,
 		},
 	}
 
-	return schema.ToolResult{Output: sb.String(), SideEffects: effects}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
 // lsadumpSam dumps local SAM account hashes from the current machine.
@@ -290,29 +291,23 @@ func (m *Mimikatz) lsadumpSam(
 	state *schema.SessionState,
 	provider providers.Provider,
 ) schema.ToolResult {
-	if !provider.HasLocalAdmin(state.User, state.Hostname) {
+	if !provider.HasLocalAdmin(state.ActiveUser, state.ActiveHost) {
 		return schema.ToolResult{
 			Output: "ERROR kuhl_m_lsadump_sam ; Handle on memory (0x00000005)",
 		}
 	}
 
-	computer, ok := provider.GetComputer(state.Hostname)
-	if !ok {
-		return schema.ToolResult{
-			Output: fmt.Sprintf("ERROR kuhl_m_lsadump_sam ; host '%s' not found", state.Hostname),
-		}
-	}
 
 	var sb strings.Builder
 	domain := providers.NetBIOSName(providers.GetDomain(provider))
-	sb.WriteString("Domain : " + state.Hostname + "\n")
-	sb.WriteString("SysKey : " + deterministicSysKey(state.Hostname) + "\n\n")
-	sb.WriteString("Local SID : S-1-5-21-" + deterministicLocalSIDParts(state.Hostname) + "\n\n")
-	sb.WriteString("SAMKey : " + deterministicSysKey(state.Hostname+"SAMKey") + "\n\n")
+	sb.WriteString("Domain : " + state.ActiveHost + "\n")
+	sb.WriteString("SysKey : " + deterministicSysKey(state.ActiveHost) + "\n\n")
+	sb.WriteString("Local SID : S-1-5-21-" + deterministicLocalSIDParts(state.ActiveHost) + "\n\n")
+	sb.WriteString("SAMKey : " + deterministicSysKey(state.ActiveHost+"SAMKey") + "\n\n")
 
 	var effects []schema.SideEffect
 
-	accounts := append([]string{"Administrator"}, computer.LocalAdmins...)
+	accounts := []string{"Administrator"}
 	seen := map[string]bool{}
 	for _, acct := range accounts {
 		if seen[acct] {
@@ -320,19 +315,20 @@ func (m *Mimikatz) lsadumpSam(
 		}
 		seen[acct] = true
 
-		hash := fnvNTLM(acct + "@" + state.Hostname)
+		hash := fnvNTLM(acct + "@" + state.ActiveHost)
 		fmt.Fprintf(&sb, "RID  : %08x (%d)\n", fnvRID(acct), fnvRID(acct))
 		fmt.Fprintf(&sb, "User : %s\n", acct)
 		sb.WriteString("  Hash NTLM: " + hash + "\n\n")
 
 		effects = append(effects, schema.SideEffect{
-			Type:  schema.SideEffectSetLoot,
-			Key:   "ntlm_hashes." + domain + `\` + acct,
-			Value: hash,
+			Type:       schema.SideEffectTypeLoot,
+			LootType:   "hash",
+			LootValue:  hash,
+			LootSource: "ntlm_hashes." + domain + `\` + acct,
 		})
 	}
 
-	return schema.ToolResult{Output: sb.String(), SideEffects: effects}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
 // kerberosGolden forges a golden ticket given a valid krbtgt NTLM hash.
@@ -352,8 +348,14 @@ func (m *Mimikatz) kerberosGolden(
 		}
 	}
 
-	expectedHash, hasKrbtgt := state.Loot.NTLMHashes["krbtgt"]
-	if hasKrbtgt && !strings.EqualFold(expectedHash, krbtgt) {
+	krbtgtStored := ""
+	for _, l := range state.Loot {
+		if l.Type == "hash" && strings.Contains(strings.ToLower(l.Source), "krbtgt") {
+			krbtgtStored = l.Value
+			break
+		}
+	}
+	if krbtgtStored != "" && !strings.EqualFold(krbtgtStored, krbtgt) {
 		return schema.ToolResult{
 			Output: "ERROR kuhl_m_kerberos_golden ; Kerberos - krbtgt hash mismatch",
 		}
@@ -378,10 +380,15 @@ func (m *Mimikatz) kerberosGolden(
 	sb.WriteString("Golden ticket for '" + user + " @ " + domain + "' successfully submitted for current session\n")
 
 	effects := []schema.SideEffect{
-		{Type: schema.SideEffectAddTicket, Value: "ticket"},
+		{
+			Type:       schema.SideEffectTypeTicket,
+			TicketType: "TGT",
+			Identity:   user,
+			Target:     domain,
+		},
 	}
 
-	return schema.ToolResult{Output: sb.String(), SideEffects: effects}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
 // kerberosPtt loads a Kerberos ticket into memory (pass-the-ticket).

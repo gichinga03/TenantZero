@@ -115,7 +115,7 @@ func (r *Rubeus) kerberoast(
 	if targetUser != "" {
 		var filtered []schema.User
 		for _, u := range candidates {
-			if strings.EqualFold(u.Username, targetUser) {
+			if strings.EqualFold(u.SAMAccountName, targetUser) {
 				filtered = append(filtered, u)
 				break
 			}
@@ -149,18 +149,18 @@ func (r *Rubeus) kerberoast(
 
 	for _, u := range candidates {
 		spnStr := ""
-		if len(u.SPN) > 0 { spnStr = u.SPN[0] }
-		hashData := deterministicHex(fnv.New64a().Sum64()^uint64(len(u.Username)*31+len(spnStr)*17), 32)
+		if len(u.SPNs) > 0 { spnStr = u.SPNs[0] }
+		hashData := deterministicHex(fnv.New64a().Sum64()^uint64(len(u.SAMAccountName)*31+len(spnStr)*17), 32)
 		h2 := fnv.New64a()
-		h2.Write([]byte("krb5tgs:" + u.Username + spnStr))
+		h2.Write([]byte("krb5tgs:" + u.SAMAccountName + spnStr))
 		challenge := deterministicHex(h2.Sum64(), 32)
 		encrypted := deterministicHex(h2.Sum64()^0xdeadbeefcafe1234, 512)
 		_ = hashData
-		hash := kerberoastHash(u.Username, domain, spnStr, challenge+"$"+encrypted)
+		hash := kerberoastHash(u.SAMAccountName, domain, spnStr, challenge+"$"+encrypted)
 
-		sb.WriteString(fmt.Sprintf("[*] SamAccountName         : %s\r\n", u.Username))
+		sb.WriteString(fmt.Sprintf("[*] SamAccountName         : %s\r\n", u.SAMAccountName))
 		sb.WriteString(fmt.Sprintf("[*] DistinguishedName      : CN=%s,CN=Users,DC=%s\r\n",
-			u.Username,
+			u.SAMAccountName,
 			dcComponents(domain),
 		))
 		sb.WriteString(fmt.Sprintf("[*] ServicePrincipalName   : %s\r\n", spnStr))
@@ -176,15 +176,16 @@ func (r *Rubeus) kerberoast(
 		}
 
 		effects = append(effects, schema.SideEffect{
-			Type:  schema.SideEffectSetLoot,
-			Key:   fmt.Sprintf("spn_hashes.%s", u.Username),
-			Value: hash,
+			Type:       schema.SideEffectTypeLoot,
+			LootType:   "spn_hash",
+			LootValue:  hash,
+			LootSource: fmt.Sprintf("spn_hashes.%s", u.SAMAccountName),
 		})
 	}
 
 	return schema.ToolResult{
-		Output:      sb.String(),
-		SideEffects: effects,
+		Output:  sb.String(),
+		Effects: effects,
 	}
 }
 
@@ -233,12 +234,12 @@ func (r *Rubeus) asktgt(
 	luid := fakeLUID()
 
 	ticket := schema.Ticket{
-		Type:      "TGT",
-		User:      user,
-		Domain:    domainUpper,
-		Hash:      hash,
-		Forged:    false,
-		ExpiresAt: time.Now().Add(10 * time.Hour),
+		TicketType: "TGT",
+		Identity:   user,
+		Target:     domainUpper,
+		B64:        hash,
+		IssuedAt:   time.Now(),
+		ExpiresAt:  time.Now().Add(10 * time.Hour),
 	}
 	ticketJSON, _ := json.Marshal(ticket)
 
@@ -267,15 +268,17 @@ func (r *Rubeus) asktgt(
 
 	return schema.ToolResult{
 		Output: sb.String(),
-		SideEffects: []schema.SideEffect{
+		Effects: []schema.SideEffect{
 			{
-				Type:  schema.SideEffectSetSessionUser,
-				Value: user,
+				Type:    schema.SideEffectTypeSetSessionUser,
+				NewUser: user,
 			},
 			{
-				Type:  schema.SideEffectAddTicket,
-				Key:   fmt.Sprintf("ticket.%s.tgt", strings.ToLower(user)),
-				Value: string(ticketJSON),
+				Type:       schema.SideEffectTypeTicket,
+				TicketType: "TGT",
+				Identity:   user,
+				Target:     domainUpper,
+				TicketB64:  string(ticketJSON),
 			},
 		},
 	}
@@ -310,8 +313,8 @@ func (r *Rubeus) s4u(
 	delegations := provider.GetDelegations()
 	var found bool
 	for _, d := range delegations {
-		if strings.EqualFold(spnHost(d.Computer), targetHost) {
-			for _, allowed := range d.AllowedTo {
+		if strings.EqualFold(spnHost(d.Account), targetHost) {
+			for _, allowed := range d.AllowedTargets {
 				if strings.EqualFold(allowed, msdsspn) || strings.EqualFold(spnHost(allowed), targetHost) {
 					found = true
 					break
@@ -349,22 +352,22 @@ func (r *Rubeus) s4u(
 	sb.WriteString(fmt.Sprintf("[+] Ticket successfully imported!\r\n"))
 
 	tkt := schema.Ticket{
-		Type:      "TGS",
-		User:      impersonate,
-		Domain:    domainUpper,
-		Hash:      "",
-		Forged:    false,
-		ExpiresAt: time.Now().Add(10 * time.Hour),
+		TicketType: "TGS",
+		Identity:   impersonate,
+		Target:     domainUpper,
+		B64:        "",
+		IssuedAt:   time.Now(),
+		ExpiresAt:  time.Now().Add(10 * time.Hour),
 	}
 	tktJSON, _ := json.Marshal(tkt)
 
 	return schema.ToolResult{
 		Output: sb.String(),
-		SideEffects: []schema.SideEffect{
+		Effects: []schema.SideEffect{
 			{
-				Type:  schema.SideEffectAddTicket,
-				Key:   fmt.Sprintf("ticket.%s.tgs.%s", strings.ToLower(impersonate), strings.ToLower(targetHost)),
-				Value: string(tktJSON),
+				Type:  schema.SideEffectTypeTicket,
+				LootSource: fmt.Sprintf("ticket.%s.tgs.%s", strings.ToLower(impersonate), strings.ToLower(targetHost)),
+				LootValue:  string(tktJSON),
 			},
 		},
 	}
@@ -382,27 +385,27 @@ func (r *Rubeus) dump(_ schema.ParsedCommand, state *schema.SessionState) schema
 
 	luid := fakeLUID()
 	for i, t := range state.Tickets {
-		sb.WriteString(fmt.Sprintf("  UserName                 :  %s\r\n", t.User))
-		sb.WriteString(fmt.Sprintf("  Domain                   :  %s\r\n", t.Domain))
+		sb.WriteString(fmt.Sprintf("  UserName                 :  %s\r\n", t.Identity))
+		sb.WriteString(fmt.Sprintf("  Domain                   :  %s\r\n", t.Target))
 		sb.WriteString(fmt.Sprintf("  LogonId                  :  %s\r\n", luid))
 		sb.WriteString(fmt.Sprintf("  UserSID                  :  S-1-5-21-3623811015-3361044348-30300820-1121\r\n"))
 		sb.WriteString(fmt.Sprintf("  AuthenticationPackage    :  Kerberos\r\n"))
 		sb.WriteString(fmt.Sprintf("  LogonType                :  Network\r\n"))
 		sb.WriteString(fmt.Sprintf("  LogonTime                :  11/22/2026 1:40:00 PM\r\n"))
-		sb.WriteString(fmt.Sprintf("  LogonServer              :  %s\r\n", t.Domain))
-		sb.WriteString(fmt.Sprintf("  LogonServerDNSDomain     :  %s\r\n", strings.ToLower(t.Domain)))
-		sb.WriteString(fmt.Sprintf("  UserPrincipalName        :  %s@%s\r\n\r\n", t.User, strings.ToLower(t.Domain)))
+		sb.WriteString(fmt.Sprintf("  LogonServer              :  %s\r\n", t.Target))
+		sb.WriteString(fmt.Sprintf("  LogonServerDNSDomain     :  %s\r\n", strings.ToLower(t.Target)))
+		sb.WriteString(fmt.Sprintf("  UserPrincipalName        :  %s@%s\r\n\r\n", t.Identity, strings.ToLower(t.Target)))
 		sb.WriteString(fmt.Sprintf("    [%d] Kerberos\r\n\r\n", i))
 		sb.WriteString(fmt.Sprintf("           ServiceName              :  %s\r\n", ticketService(t)))
-		sb.WriteString(fmt.Sprintf("           ServiceRealm             :  %s\r\n", t.Domain))
-		sb.WriteString(fmt.Sprintf("           UserName                 :  %s\r\n", t.User))
-		sb.WriteString(fmt.Sprintf("           UserRealm                :  %s\r\n", t.Domain))
+		sb.WriteString(fmt.Sprintf("           ServiceRealm             :  %s\r\n", t.Target))
+		sb.WriteString(fmt.Sprintf("           UserName                 :  %s\r\n", t.Identity))
+		sb.WriteString(fmt.Sprintf("           UserRealm                :  %s\r\n", t.Target))
 		sb.WriteString(fmt.Sprintf("           StartTime                :  %s\r\n", time.Now().Format("1/2/2006 3:04:05 PM")))
 		sb.WriteString(fmt.Sprintf("           EndTime                  :  %s\r\n", t.ExpiresAt.Format("1/2/2006 3:04:05 PM")))
 		sb.WriteString(fmt.Sprintf("           RenewTill                :  %s\r\n", time.Now().Add(7*24*time.Hour).Format("1/2/2006 3:04:05 PM")))
 		sb.WriteString(fmt.Sprintf("           Flags                    :  name_canonicalize, pre_authent, renewable, forwarded, forwardable\r\n"))
 		sb.WriteString(fmt.Sprintf("           KeyType                  :  rc4_hmac\r\n"))
-		sb.WriteString(fmt.Sprintf("           Base64(key)              :  %s\r\n\r\n", shortBlob(t.User)))
+		sb.WriteString(fmt.Sprintf("           Base64(key)              :  %s\r\n\r\n", shortBlob(t.Identity)))
 	}
 
 	return schema.ToolResult{Output: sb.String()}
@@ -443,7 +446,7 @@ func (r *Rubeus) triage(state *schema.SessionState) schema.ToolResult {
 	for _, t := range state.Tickets {
 		sb.WriteString(fmt.Sprintf(" %-20s  %-20s  %-40s  %-25s\r\n",
 			luid,
-			fmt.Sprintf("%s @ %s", t.User, t.Domain),
+			fmt.Sprintf("%s @ %s", t.Identity, t.Target),
 			ticketService(t),
 			t.ExpiresAt.Format("1/2/2006 3:04:05 PM"),
 		))
@@ -585,10 +588,10 @@ func spnHost(spn string) string {
 
 // ticketService returns a display string for the service field in dump/triage.
 func ticketService(t schema.Ticket) string {
-	if t.Type == "TGT" {
-		return fmt.Sprintf("krbtgt/%s", t.Domain)
+	if t.TicketType == "TGT" {
+		return fmt.Sprintf("krbtgt/%s", t.Target)
 	}
-	return fmt.Sprintf("cifs/%s", strings.ToLower(t.Domain))
+	return fmt.Sprintf("cifs/%s", strings.ToLower(t.Target))
 }
 
 // credLine formats the credential line shown in asktgt output.

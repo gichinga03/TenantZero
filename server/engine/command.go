@@ -35,12 +35,12 @@ func Parse(raw string) schema.ParsedCommand {
 
 	// --- PowerView: binary is a known Get-*/Set-*/Add-* verb ---
 	if isPowerViewVerb(first) {
-		cmd.Binary = normaliseBinary(first)
+		cmd.Executable = normaliseBinary(first)
 		return parseFlags(cmd, tokens[1:])
 	}
 
 	// --- everything else: first token is the binary ---
-	cmd.Binary = normaliseBinary(first)
+	cmd.Executable = normaliseBinary(first)
 	rest := tokens[1:]
 
 	// Second token is subcommand if it doesn't start with - or /
@@ -62,7 +62,7 @@ func isMimikatz(raw string) bool {
 // Binary → "mimikatz", Subcommand → "module::command" (lowercased).
 func parseMimikatz(raw string) schema.ParsedCommand {
 	cmd := schema.ParsedCommand{Raw: raw}
-	cmd.Binary = "mimikatz"
+	cmd.Executable = "mimikatz"
 
 	hashIdx := strings.Index(raw, "#")
 	if hashIdx < 0 {
@@ -248,19 +248,19 @@ var builtins = map[string]bool{
 // Dispatch routes a parsed command to either a shell builtin or the tool
 // registry. Unknown binaries return a "not recognised" ToolResult.
 func (s *Session) Dispatch(cmd schema.ParsedCommand) schema.ToolResult {
-	if builtins[cmd.Binary] {
+	if builtins[cmd.Executable] {
 		return s.dispatchBuiltin(cmd)
 	}
 
-	return s.Registry.Dispatch(cmd, s.State, s.Provider, s.Lab.Tools.Overrides)
+	return s.Registry.Dispatch(cmd, &s.State, s.Provider, s.Lab.Tools.Overrides)
 }
 
 // dispatchBuiltin handles all shell-level commands without touching the tool
 // registry.
 func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
-	fs := NewFS(s.Lab, s.State)
+	fs := NewFS(&s.Lab, &s.State)
 
-	switch cmd.Binary {
+	switch cmd.Executable {
 	case builtinCD:
 		path := ""
 		if len(cmd.Args) > 0 {
@@ -274,12 +274,8 @@ func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
 		if err != nil {
 			return schema.ToolResult{Output: err.Error()}
 		}
-		return schema.ToolResult{
-			Output: "",
-			SideEffects: []schema.SideEffect{
-				{Type: schema.SideEffectSetCWD, Value: resolved},
-			},
-		}
+		s.State.CWD = resolved
+		return schema.ToolResult{Output: ""}
 
 	case builtinLS, builtinDir:
 		path := s.State.CWD
@@ -308,16 +304,16 @@ func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
 	case builtinExit:
 		return schema.ToolResult{
 			Output: "Session ended by user.",
-			SideEffects: []schema.SideEffect{
+			Effects: []schema.SideEffect{
 				{Type: "session_end"},
 			},
 		}
 
 	case "whoami":
-		domain := strings.ToUpper(strings.SplitN(s.Lab.Domains[0].Name, ".", 2)[0])
-		user := s.State.User
+		domain := strings.ToUpper(strings.SplitN(s.Lab.Domain.Name, ".", 2)[0])
+		user := s.State.ActiveUser
 		if hasFlag(cmd.Flags, "all") || hasFlag(cmd.Flags, "a") {
-			return schema.ToolResult{Output: whoamiAll(domain, user, s.Lab, s.State)}
+			return schema.ToolResult{Output: whoamiAll(domain, user, s.Lab, &s.State)}
 		}
 		if hasFlag(cmd.Flags, "groups") {
 			return schema.ToolResult{Output: whoamiGroups(domain, user, s.Lab)}
@@ -328,15 +324,13 @@ func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
 		return schema.ToolResult{Output: fmt.Sprintf(`%s\%s`, domain, user)}
 
 	case "hostname":
-		return schema.ToolResult{Output: s.State.Hostname}
+		return schema.ToolResult{Output: s.State.ActiveHost}
 
 	case "ipconfig":
 		ip := ""
-		for _, d := range s.Lab.Domains {
-			for _, computer := range d.Computers {
-				if strings.EqualFold(computer.Hostname, s.State.Hostname) {
-					ip = computer.IP
-				}
+		for _, h := range s.Lab.Hosts {
+			if strings.EqualFold(h.Hostname, s.State.ActiveHost) {
+				ip = h.IP
 			}
 		}
 		if ip == "" { ip = "10.10.10.10" }
@@ -355,7 +349,7 @@ func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
 		return schema.ToolResult{Output: s.nextHint()}
 	}
 
-	return schema.ToolResult{Output: fmt.Sprintf("builtin '%s' not implemented", cmd.Binary)}
+	return schema.ToolResult{Output: fmt.Sprintf("builtin '%s' not implemented", cmd.Executable)}
 }
 
 // helpText returns a formatted list of available tool binaries from the
@@ -375,26 +369,23 @@ func (s *Session) helpText() string {
 // nextHint returns the first unused hint whose MinElapsedMinutes threshold
 // has been reached, or a no-hints message.
 func (s *Session) nextHint() string {
-	used := make(map[int]bool, len(s.State.UsedHints))
-	for _, idx := range s.State.UsedHints {
-		used[idx] = true
+	used := make(map[string]bool, len(s.State.UsedHints))
+	for _, id := range s.State.UsedHints {
+		used[id] = true
 	}
 
 	for i, h := range s.Lab.Hints {
-		if used[i] {
+		if used[h.ID] {
 			continue
 		}
-		if false /* hints always available */ {
-			continue
-		}
-		s.State.UsedHints = append(s.State.UsedHints, i)
+		s.State.UsedHints = append(s.State.UsedHints, h.ID)
 		return fmt.Sprintf("[Hint %d/%d] %s", i+1, len(s.Lab.Hints), h.Text)
 	}
 	return "No hints available yet. Keep trying."
 }
 
 // whoamiAll produces output matching "whoami /all" on a domain-joined Windows host.
-func whoamiAll(domain, user string, lab *schema.Lab, state *schema.SessionState) string {
+func whoamiAll(domain, user string, lab schema.Lab, state *schema.SessionState) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("\r\nUSER INFORMATION\r\n----------------\r\n\r\n"))
 	sb.WriteString(fmt.Sprintf("User Name           SID\r\n"))
@@ -409,7 +400,7 @@ func whoamiAll(domain, user string, lab *schema.Lab, state *schema.SessionState)
 }
 
 // whoamiGroups produces output matching "whoami /groups".
-func whoamiGroups(domain, user string, lab *schema.Lab) string {
+func whoamiGroups(domain, user string, lab schema.Lab) string {
 	var sb strings.Builder
 	sb.WriteString("\r\nGROUP INFORMATION\r\n-----------------\r\n\r\n")
 	sb.WriteString("Group Name                                 Type             SID                                            Attributes\r\n")
@@ -441,7 +432,7 @@ func whoamiGroups(domain, user string, lab *schema.Lab) string {
 }
 
 // whoamiPrivs produces output matching "whoami /priv".
-func whoamiPrivs(user string, lab *schema.Lab) string {
+func whoamiPrivs(user string, lab schema.Lab) string {
 	_ = user
 	_ = lab
 	var sb strings.Builder

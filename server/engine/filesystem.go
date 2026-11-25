@@ -126,7 +126,7 @@ func (f *FS) Cat(p string) string {
 		return "The system cannot find the file specified."
 	}
 
-	return content
+	return content.Data
 }
 
 // --- path helpers ---
@@ -206,7 +206,7 @@ func isDA(state *schema.SessionState, lab *schema.Lab) bool {
 	for _, g := range lab.Groups {
 		if strings.EqualFold(g.Name, daGroup) {
 			for _, m := range g.Members {
-				if strings.EqualFold(m, state.User) {
+				if strings.EqualFold(m, state.ActiveUser) {
 					return true
 				}
 			}

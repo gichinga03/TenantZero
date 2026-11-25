@@ -113,13 +113,13 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		result := sess.Dispatch(parsed)
 
 		// Apply side effects.
-		sess.Apply(result)
+		sess.ApplySideEffects(result.Effects)
 		var pushEvents []schema.PushEvent
 
 		// Mail tick.
 		mailPush, mailEffect := mailClient.Tick()
 		if mailEffect != nil {
-			sess.Apply(schema.ToolResult{SideEffects: []schema.SideEffect{*mailEffect}})
+			sess.ApplySideEffects([]schema.SideEffect{*mailEffect})
 		}
 		if mailPush != nil {
 			pushEvents = append(pushEvents, *mailPush)
@@ -136,8 +136,8 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 			Sequence:   len(sess.State.Journal),
 			Input:      msg.Payload,
 			Output:     result.Output,
-			Machine:    sess.State.Hostname,
-			Username:   sess.State.User,
+			Machine:    sess.State.ActiveHost,
+			Username:   sess.State.ActiveUser,
 			RecordedAt: time.Now().UTC(),
 		}
 		if err := h.store.AppendJournal(storeEntry); err != nil {
@@ -157,10 +157,11 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 		// Send push events.
 		for _, ev := range pushEvents {
+			payloadStr, _ := ev.Payload.(string)
 			writeMsg(conn, serverMsg{
 				Type:      "event",
-				EventType: string(ev.Type),
-				Payload:   ev.Payload,
+				EventType: ev.Type,
+				Payload:   payloadStr,
 			})
 			if ev.Type == "lab_complete" {
 				h.store.MarkComplete(sessRow.ID)
@@ -270,10 +271,13 @@ func (h *Handler) initSession(r *http.Request, userID string) (
 		}
 	}
 
-	adProvider := ad.New(&lab, &state)
-	sess := engine.NewSession(&lab, nil, &state, adProvider, h.registry)
+	adProvider := ad.NewADProvider(lab, &state)
+	sess := engine.NewSession(lab, userID)
+	sess.State = state
+	sess.Provider = adProvider
+	sess.Registry = h.registry
 	mailClient := engine.NewMailClient(&lab, &state)
-	evaluator := engine.NewEvaluator(&lab, &state, adProvider)
+	evaluator := engine.NewEvaluator(&lab, &sess.State, adProvider)
 	return sess, mailClient, evaluator, sessRow, nil
 }
 

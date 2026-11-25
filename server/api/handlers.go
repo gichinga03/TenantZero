@@ -2,6 +2,8 @@
 package api
 
 import (
+	"log"
+	"errors"
 	"bytes"
 	"context"
 	"database/sql"
@@ -111,10 +113,11 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, err := h.store.GetUserByUsername(body.Username)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		jsonError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	} else if err != nil {
+		log.Printf("[!] handleLogin GetUserByUsername: %v", err)
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -270,12 +273,12 @@ func (h *Handler) loadLabMeta(id string) (labMeta, error) {
 	}
 	return labMeta{
 		ID:            id,
-		Name:          lab.Name,
-		Difficulty:    lab.Difficulty,
+		Name:          lab.LabID,
+		Difficulty:    "",
 		Machines:      len(lab.Computers),
 		Forests:       1 + len(lab.Trusts),
-		Concepts:      lab.Tags,
-		EstimatedTime: lab.Time.SessionTimeout,
+		Concepts:      nil,
+		EstimatedTime: lab.Time.SessionTimeoutMinutes,
 	}, nil
 }
 

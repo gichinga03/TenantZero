@@ -78,10 +78,10 @@ func LoadLab(dir string) (*schema.Lab, *schema.Engagement, error) {
 // validateLab checks required fields and returns a descriptive error on the
 // first violation found.
 func validateLab(lab *schema.Lab) error {
-	if lab.ID == "" {
-		return errors.New("lab.id is required")
+	if lab.LabID == "" {
+		return errors.New("lab.lab_id is required")
 	}
-	if lab.Domains[0].Name == "" {
+	if lab.Domain.Name == "" {
 		return errors.New("lab.domain.name is required")
 	}
 	if len(lab.WinConditions) == 0 {
@@ -100,27 +100,25 @@ func validateLab(lab *schema.Lab) error {
 // emit appropriate errors via the registry Requires check.
 func InitState(lab *schema.Lab, sessionID string) *schema.SessionState {
 	state := &schema.SessionState{
-		ID: sessionID,
-		LabID:     lab.ID,
-		StartedAt: time.Now().UTC(),
-		Loot: schema.Loot{
-			NTLMHashes:   make(map[string]string),
-			PlaintextCreds:    make(map[string]string),
-			PFXCerts: make(map[string]string),
-		},
-		Tickets: []schema.Ticket{},
-		Tokens:  []schema.Token{},
-		Journal: []schema.JournalEntry{},
+		LabID:               lab.LabID,
+		UserID:              sessionID,
+		StartedAt:           time.Now().UTC(),
+		LastActivityAt:      time.Now().UTC(),
+		Loot:                []schema.Loot{},
+		Tickets:             []schema.Ticket{},
+		Tokens:              []schema.Token{},
+		Journal:             []schema.JournalEntry{},
 		CompletedObjectives: []schema.CompletedObjective{},
+		BeaconTree:          []schema.Beacon{},
+		GrantedACLs:         map[string][]string{},
+		UsedHints:           []string{},
 	}
 
 	if lab.StartingPoint.Machine != "" {
-		// drop-in: land on a configured machine
-		state.User     = lab.StartingPoint.User
-		state.Hostname = lab.StartingPoint.Machine
-		state.CWD      = `C:\`
+		state.ActiveUser = lab.StartingPoint.User
+		state.ActiveHost = lab.StartingPoint.Machine
+		state.CWD        = `C:\`
 	} else {
-		// full-chain: attacker box, no AD context yet
 		state.CWD = `C:\`
 	}
 

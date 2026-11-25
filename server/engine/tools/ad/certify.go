@@ -27,12 +27,12 @@ func (c *Certify) Execute(
 	state *schema.SessionState,
 	provider providers.Provider,
 ) schema.ToolResult {
-	if len(cmd.Args) == 0 {
+	if cmd.Subcommand == "" {
 		return schema.ToolResult{Output: certifyBanner()}
 	}
 
-	subcommand := strings.ToLower(cmd.Args[0])
-	flags := parseCertifyFlags(cmd.Args[1:])
+	subcommand := strings.ToLower(cmd.Subcommand)
+	flags := cmd.Flags
 
 	switch subcommand {
 	case "find":
@@ -178,7 +178,7 @@ func (c *Certify) request(
 
 	subjectID := altname
 	if subjectID == "" {
-		subjectID = state.User
+		subjectID = state.ActiveUser
 	}
 
 	pfxBlob := deterministicPFX(templateName, subjectID)
@@ -186,7 +186,7 @@ func (c *Certify) request(
 	var sb strings.Builder
 	sb.WriteString("[*] Action: Request a Certificates\n\n")
 	fmt.Fprintf(&sb, "[*] Current user context    : %s\\%s\n",
-		providers.NetBIOSName(providers.GetDomain(provider)), state.User)
+		providers.NetBIOSName(providers.GetDomain(provider)), state.ActiveUser)
 	fmt.Fprintf(&sb, "[*] No subject name specified, using current context as subject.\n\n")
 	fmt.Fprintf(&sb, "[*] Template                : %s\n", target.Name)
 	if altname != "" {
@@ -206,18 +206,19 @@ func (c *Certify) request(
 
 	effects := []schema.SideEffect{
 		{
-			Type:  schema.SideEffectSetLoot,
-			Key:   "pfx_certs." + subjectID,
-			Value: pfxBlob,
+			Type:       schema.SideEffectTypeLoot,
+			LootType:   "pfx_cert",
+			LootValue:  pfxBlob,
+			LootSource: "pfx_certs." + subjectID,
 		},
 	}
 
-	return schema.ToolResult{Output: sb.String(), SideEffects: effects}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
 // isVulnerableTemplate returns true if any ESC flag is set.
 func isVulnerableTemplate(t schema.CertTemplate) bool {
-	return t.ESC1 || t.ESC2 || t.ESC3 || t.ESC4 || t.ESC5 || t.ESC6 || t.ESC7 || t.ESC8
+	return t.ESC1 || t.ESC2 || t.ESC3 || t.ESC4 || t.ESC8
 }
 
 // formatCertTemplate renders a single certificate template block in Certify output format.
@@ -278,15 +279,7 @@ func escFlagAnnotations(t schema.CertTemplate) []string {
 	if t.ESC3 {
 		out = append(out, "ESC3: Certificate Request Agent EKU")
 	}
-	if t.ESC5 {
-		out = append(out, "ESC5: PKI object access control misconfiguration")
-	}
-	if t.ESC6 {
-		out = append(out, "ESC6: EDITF_ATTRIBUTESUBJECTALTNAME2 flag on CA")
-	}
-	if t.ESC7 {
-		out = append(out, "ESC7: Vulnerable CA permissions")
-	}
+
 	if t.ESC8 {
 		out = append(out, "ESC8: NTLM relay to AD CS HTTP endpoints")
 	}
@@ -302,20 +295,7 @@ func deterministicPFX(templateName, subject string) string {
 	return h + h2 + h3
 }
 
-// parseCertifyFlags extracts /key:value and /key (boolean) pairs from Certify args.
-func parseCertifyFlags(args []string) map[string]string {
-	flags := make(map[string]string)
-	for _, a := range args {
-		stripped := strings.TrimPrefix(a, "/")
-		stripped = strings.TrimPrefix(stripped, "--")
-		if idx := strings.Index(stripped, ":"); idx >= 0 {
-			flags[strings.ToLower(stripped[:idx])] = stripped[idx+1:]
-		} else {
-			flags[strings.ToLower(stripped)] = "true"
-		}
-	}
-	return flags
-}
+
 
 func certifyBanner() string {
 	return `

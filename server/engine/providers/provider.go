@@ -72,6 +72,12 @@ type Provider interface {
 	// GetDomainControllers returns computers where IsDC == true.
 	GetDomainControllers() []schema.Computer
 
+	// GetHost returns the host matching hostname or IP (case-insensitive).
+	GetHost(hostname string) (schema.Host, bool)
+
+	// GetAllHosts returns all hosts defined in the lab.
+	GetAllHosts() []schema.Host
+
 	// GetLocalAdmins returns the list of principals (users or groups) that
 	// have local administrator access on the given hostname.
 	GetLocalAdmins(hostname string) []string

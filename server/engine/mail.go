@@ -46,7 +46,7 @@ func (m *MailClient) Handle(cmd schema.ParsedCommand) schema.ToolResult {
 	sub := strings.ToLower(strings.TrimSpace(cmd.Subcommand))
 
 	switch {
-	case cmd.Binary == "sendmail" || sub == "send":
+	case cmd.Executable == "sendmail" || sub == "send":
 		return m.handleSend(cmd)
 	default:
 		return m.handleInbox()
@@ -132,11 +132,10 @@ func (m *MailClient) Tick() (*schema.PushEvent, *schema.SideEffect) {
 
 		token := fakeJWT(p.victim, code)
 		m.state.Tokens = append(m.state.Tokens, schema.Token{
-			Raw:        token,
-			Type:      p.tokenType,
-			User:       p.victim,
-			AcquiredAt: time.Now().UTC(),
-			ExpiresAt:  time.Now().UTC().Add(time.Hour),
+			Username:  p.victim,
+			Domain:   "",
+			Fake:     token,
+			IssuedAt: time.Now().UTC(),
 		})
 
 		evt := &schema.PushEvent{
@@ -148,9 +147,9 @@ func (m *MailClient) Tick() (*schema.PushEvent, *schema.SideEffect) {
 		}
 
 		se := &schema.SideEffect{
-			Type: schema.SideEffectAddToken,
-			Key:  p.victim,
-			Value: token,
+			Type:          schema.SideEffectTypeAddToken,
+			TokenUsername: p.victim,
+			TokenFake:     token,
 		}
 
 		return evt, se

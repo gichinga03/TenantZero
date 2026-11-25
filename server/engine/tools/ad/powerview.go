@@ -27,7 +27,7 @@ func (pv *PowerView) Execute(
 ) schema.ToolResult {
 	fn := cmd.Subcommand
 	if fn == "" {
-		fn = cmd.Binary // module-style: function is the binary token
+		fn = cmd.Executable // module-style: function is the binary token
 	}
 
 	switch strings.ToLower(fn) {
@@ -72,13 +72,13 @@ func (pv *PowerView) getDomainUser(cmd schema.ParsedCommand, p providers.Provide
 	var out []string
 
 	for _, u := range users {
-		if identity != "" && !strings.EqualFold(u.Username, identity) {
+		if identity != "" && !strings.EqualFold(u.SAMAccountName, identity) {
 			continue
 		}
-		if spnOnly && len(u.SPN) == 0 {
+		if spnOnly && len(u.SPNs) == 0 {
 			continue
 		}
-		if adminOnly && u.AdminCount == 0 {
+		if adminOnly && !u.AdminCount {
 			continue
 		}
 		out = append(out, renderUser(u, p))
@@ -90,18 +90,18 @@ func (pv *PowerView) getDomainUser(cmd schema.ParsedCommand, p providers.Provide
 func renderUser(u schema.User, p providers.Provider) string {
 	domain := p.DomainName()
 	domainName := domain
-	upn := fmt.Sprintf("%s@%s", u.Username, domain)
+	upn := fmt.Sprintf("%s@%s", u.SAMAccountName, domain)
 
 	var groups []string
 	for _, g := range p.GetGroups() {
 		for _, m := range g.Members {
-			if strings.EqualFold(m, u.Username) {
+			if strings.EqualFold(m, u.SAMAccountName) {
 				groups = append(groups, fmt.Sprintf("CN=%s,CN=Users,DC=%s", g.Name, dcComponents(domainName)))
 			}
 		}
 	}
 
-	spns := strings.Join(u.SPN, ", ")
+	spns := strings.Join(u.SPNs, ", ")
 	if spns == "" {
 		spns = "{}"
 	}
@@ -117,17 +117,17 @@ func renderUser(u schema.User, p providers.Provider) string {
 	}
 
 	return joinFields([]kv{
-		{"SamAccountName", u.Username},
+		{"SamAccountName", u.SAMAccountName},
 		{"UserPrincipalName", upn},
-		{"DisplayName", u.Username},
+		{"DisplayName", u.SAMAccountName},
 		{"MemberOf", memberOf},
 		{"ServicePrincipalName", spns},
-		{"AdminCount", boolStr(u.AdminCount > 0)},
+		{"AdminCount", boolStr(u.AdminCount)},
 		{"UserAccountControl", flags},
-		{"Description", u.Description},
+		{"Description", ""},
 		{"PasswordLastSet", "01/01/2026 00:00:00"},
 		{"LastLogonDate", "01/01/2026 00:00:00"},
-		{"DistinguishedName", fmt.Sprintf("CN=%s,CN=Users,DC=%s", u.Username, dcComponents(domain))},
+		{"DistinguishedName", fmt.Sprintf("CN=%s,CN=Users,DC=%s", u.SAMAccountName, dcComponents(domain))},
 	})
 }
 
@@ -178,7 +178,7 @@ func (pv *PowerView) getDomainComputer(cmd schema.ParsedCommand, p providers.Pro
 	var out []string
 
 	for _, c := range computers {
-		if identity != "" && !strings.EqualFold(c.Hostname, identity) {
+		if identity != "" && !strings.EqualFold(c.Name, identity) {
 			continue
 		}
 		delegations := p.GetConstrainedDelegation()
@@ -192,10 +192,10 @@ func (pv *PowerView) getDomainComputer(cmd schema.ParsedCommand, p providers.Pro
 }
 
 func renderComputer(c schema.Computer, delegations []schema.Delegation, domain string) string {
-	spn := fmt.Sprintf("HOST/%s.%s, RestrictedKrbHost/%s.%s", c.Hostname, domain, c.Hostname, domain)
+	spn := fmt.Sprintf("HOST/%s.%s, RestrictedKrbHost/%s.%s", c.Name, domain, c.Name, domain)
 	var del schema.Delegation
 	for _, d := range delegations {
-		if strings.EqualFold(d.Computer, c.Hostname) {
+		if strings.EqualFold(d.Account, c.Name) {
 			del = d
 			break
 		}
@@ -203,18 +203,18 @@ func renderComputer(c schema.Computer, delegations []schema.Delegation, domain s
 	delType := "None"
 	if del.Type == "unconstrained" {
 		delType = "Unconstrained"
-	} else if len(del.AllowedTo) > 0 {
+	} else if len(del.AllowedTargets) > 0 {
 		delType = "Constrained"
 	}
 	return joinFields([]kv{
-		{"SamAccountName", c.Hostname + "$"},
-		{"DNSHostName", fmt.Sprintf("%s.%s", c.Hostname, domain)},
-		{"OperatingSystem", c.OS},
+		{"SamAccountName", c.Name + "$"},
+		{"DNSHostName", fmt.Sprintf("%s.%s", c.Name, domain)},
+		{"OperatingSystem", c.OperatingSystem},
 		{"ServicePrincipalName", spn},
 		{"TrustedForDelegation", boolStr(del.Type == "unconstrained")},
 		{"TrustedToAuthForDelegation", boolStr(false)},
 		{"DelegationType", delType},
-		{"DistinguishedName", fmt.Sprintf("CN=%s,OU=Computers,DC=%s", c.Hostname, dcComponents(domain))},
+		{"DistinguishedName", fmt.Sprintf("CN=%s,OU=Computers,DC=%s", c.Name, dcComponents(domain))},
 	})
 }
 
@@ -229,7 +229,7 @@ func (pv *PowerView) getDomainTrust(cmd schema.ParsedCommand, p providers.Provid
 		direction := trustDirection(t.Direction)
 		out = append(out, joinFields([]kv{
 			{"SourceName", domain},
-			{"TargetName", t.ToDomain},
+			{"TargetName", t.TargetForest},
 			{"TrustDirection", direction},
 			{"TrustType", t.TrustType},
 			{"TrustAttributes", trustAttribs(t)},
@@ -270,25 +270,15 @@ func trustAttribs(t schema.Trust) string {
 
 func (pv *PowerView) getDomainController(cmd schema.ParsedCommand, p providers.Provider) schema.ToolResult {
 	domainName := p.DomainName()
-	computers := p.GetComputers()
 	var out []string
 
-	for _, c := range computers {
-		isDC := false
-		for _, r := range c.Roles {
-			if strings.EqualFold(r, "DomainController") {
-				isDC = true
-			}
-		}
-		if !isDC {
-			continue
-		}
+	for _, c := range p.GetDomainControllers() {
 		out = append(out, joinFields([]kv{
-			{"Name", fmt.Sprintf("%s.%s", c.Hostname, domainName)},
+			{"Name", fmt.Sprintf("%s.%s", c.Name, domainName)},
 			{"Domain", domainName},
 			{"Forest", domainName},
-			{"IPAddress", c.IP},
-			{"OSVersion", c.OS},
+			{"IPAddress", p.DomainController()},
+			{"OSVersion", c.OperatingSystem},
 			{"Roles", "SchemaRole, NamingRole, PdcRole, RidRole, InfrastructureRole"},
 		}))
 	}
@@ -314,7 +304,7 @@ func (pv *PowerView) getObjectAcl(cmd schema.ParsedCommand, p providers.Provider
 		out = append(out, joinFields([]kv{
 			{"ObjectDN", objectDN},
 			{"ObjectSID", resolveSID(identity, "")},
-			{"ActiveDirectoryRights", a.Right},
+			{"ActiveDirectoryRights", a.Rights},
 			{"SecurityIdentifier", trusteeSID},
 			{"IdentityReferenceName", a.From},
 			{"AceType", "AccessAllowed"},
@@ -345,7 +335,7 @@ func (pv *PowerView) findInterestingDomainAcl(cmd schema.ParsedCommand, p provid
 		objectDN := fmt.Sprintf("CN=%s,CN=Users,DC=%s", a.To, dcComponents(domain))
 		out = append(out, joinFields([]kv{
 			{"ObjectDN", objectDN},
-			{"ActiveDirectoryRights", a.Right},
+			{"ActiveDirectoryRights", a.Rights},
 			{"IdentityReferenceName", a.From},
 			{"SecurityIdentifier", resolveSID(a.From, "")},
 			{"AceType", "AccessAllowed"},
@@ -370,9 +360,9 @@ func (pv *PowerView) getDomainGroupMember(cmd schema.ParsedCommand, p providers.
 	for _, m := range members {
 		out = append(out, joinFields([]kv{
 			{"GroupName", identity},
-			{"MemberName", m.Username},
+			{"MemberName", m.SAMAccountName},
 			{"MemberDomain", domain},
-			{"MemberDistinguishedName", fmt.Sprintf("CN=%s,CN=Users,DC=%s", m.Username, dcComponents(domain))},
+			{"MemberDistinguishedName", fmt.Sprintf("CN=%s,CN=Users,DC=%s", m.SAMAccountName, dcComponents(domain))},
 			{"MemberObjectClass", "user"},
 		}))
 	}
@@ -404,7 +394,7 @@ func textResult(fn string, objects []string) schema.ToolResult {
 	return schema.ToolResult{
 		Output:      strings.Join(objects, "\n\n"),
 		IsError:     false,
-		SideEffects: nil,
+		Effects: nil,
 	}
 }
 
@@ -412,7 +402,7 @@ func noResult(fn, msg string) schema.ToolResult {
 	return schema.ToolResult{
 		Output:      msg,
 		IsError:     false,
-		SideEffects: nil,
+		Effects: nil,
 	}
 }
 
@@ -447,7 +437,7 @@ func resolveSID(name, domainSID string) string {
 }
 // PowerViewVerbs returns all PowerShell function names this tool handles.
 // Used to register each verb directly in the tool registry so the parser's
-// cmd.Binary (the verb itself) resolves to this tool.
+// cmd.Executable (the verb itself) resolves to this tool.
 func PowerViewVerbs() []string {
 	return []string{
 		"get-domainuser",
@@ -477,11 +467,11 @@ func (pv *PowerView) setDomainObject(
 	}
 
 	// Check caller has GenericWrite or GenericAll over the target.
-	caller := state.User
+	caller := state.ActiveUser
 	var hasWrite bool
 	for _, a := range p.GetACLs() {
 		if strings.EqualFold(a.From, caller) && strings.EqualFold(a.To, identity) {
-			if a.Right == "GenericWrite" || a.Right == "GenericAll" || a.Right == "AllExtendedRights" {
+			if a.Rights == "GenericWrite" || a.Rights == "GenericAll" || a.Rights == "AllExtendedRights" {
 				hasWrite = true
 				break
 			}
@@ -498,8 +488,8 @@ func (pv *PowerView) setDomainObject(
 	// a loot side-effect so win conditions can fire.
 	return schema.ToolResult{
 		Output: fmt.Sprintf("[*] Set-DomainObject executed on '%s'\r\n", identity),
-		SideEffects: []schema.SideEffect{
-			{Type: "set_domain_object", Key: identity, Value: "modified"},
+		Effects: []schema.SideEffect{
+			{Type: "set_domain_object", LootSource: identity, LootValue: "modified"},
 		},
 	}
 }
@@ -524,12 +514,12 @@ func (pv *PowerView) addDomainObjectAcl(
 
 	// Check caller has WriteDACL over target.
 	// Normalise "DC=meridian,DC=local" → "meridian.local" for ACL table lookup.
-	caller := state.User
+	caller := state.ActiveUser
 	aclTarget := normDN(target)
 	var hasWriteDACL bool
 	for _, a := range p.GetACLs() {
 		if strings.EqualFold(a.From, caller) && (strings.EqualFold(a.To, aclTarget) || strings.EqualFold(a.To, target)) {
-			if a.Right == "WriteDACL" || a.Right == "GenericAll" || a.Right == "WriteOwner" {
+			if a.Rights == "WriteDACL" || a.Rights == "GenericAll" || a.Rights == "WriteOwner" {
 				hasWriteDACL = true
 				break
 			}
@@ -546,8 +536,8 @@ func (pv *PowerView) addDomainObjectAcl(
 			"[*] Add-DomainObjectAcl: granted '%s' rights '%s' on '%s'\r\n",
 			principal, rights, target,
 		),
-		SideEffects: []schema.SideEffect{
-			{Type: "acl_granted", Key: fmt.Sprintf("%s.%s", principal, target), Value: rights},
+		Effects: []schema.SideEffect{
+			{Type: schema.SideEffectTypeGrantACL, Principal: principal, ACLTarget: normDN(target), ACLRight: rights},
 		},
 	}
 }
@@ -573,7 +563,7 @@ func (pv *PowerView) getDomainObjectAcl(cmd schema.ParsedCommand, p providers.Pr
 		domain := p.DomainName()
 		out = append(out, fmt.Sprintf(
 			"ObjectDN                       : CN=%s,CN=Users,DC=%s\r\nActiveDirectoryRights          : %s\r\nIdentityReferenceName          : %s\r\nAceType                        : AccessAllowed",
-			a.To, dcComponents(domain), a.Right, a.From,
+			a.To, dcComponents(domain), a.Rights, a.From,
 		))
 	}
 	return textResult("Get-DomainObjectAcl", out)

@@ -50,32 +50,27 @@ func (r *Registry) Dispatch(
 	p providers.Provider,
 	overrides map[string]schema.ToolOverride,
 ) schema.ToolResult {
-	tool, ok := r.Get(cmd.Binary)
+	tool, ok := r.Get(cmd.Executable)
 	// PowerView cmdlets arrive with the function name as Binary (e.g. "Get-DomainUser").
 	// Fall back to the PowerView tool when the binary name contains a hyphen.
-	if !ok && strings.Contains(cmd.Binary, "-") {
+	if !ok && strings.Contains(cmd.Executable, "-") {
 		tool, ok = r.Get("PowerView.ps1")
 	}
 	if !ok {
 		return shellError(fmt.Sprintf(
 			"'%s' is not recognized as an internal or external command, operable program or batch file.",
-			cmd.Binary,
+			cmd.Executable,
 		))
 	}
 
 	// Override key: "<binary>.<subcommand>" — subcommand may be empty.
-	overrideKey := cmd.Binary
+	overrideKey := cmd.Executable
 	if cmd.Subcommand != "" {
-		overrideKey = cmd.Binary + "." + cmd.Subcommand
+		overrideKey = cmd.Executable + "." + cmd.Subcommand
 	}
-	if ovMap, exists := overrides[overrideKey]; exists {
-		if ov, ok := ovMap[cmd.Subcommand]; ok {
-			if ov.Blocked {
-				return shellError("Access is denied.")
-			}
-			if err := checkRequires(ov.Requires, state, p); err != "" {
-				return shellError(err)
-			}
+	if ov, exists := overrides[overrideKey]; exists {
+		if ov.Disabled {
+			return shellError("Access is denied.")
 		}
 	}
 
@@ -88,14 +83,14 @@ func checkRequires(requires []string, state *schema.SessionState, p providers.Pr
 	for _, cond := range requires {
 		switch cond {
 		case "da_session":
-			if !p.HasDomainAdmin(state.User) {
+			if !p.HasDomainAdmin(state.ActiveUser) {
 				return "This command requires a Domain Admin session."
 			}
 		case "local_admin":
-			if !p.HasLocalAdmin(state.User, state.Hostname) {
+			if !p.HasLocalAdmin(state.ActiveUser, state.ActiveHost) {
 				return fmt.Sprintf(
 					"Access is denied. %s does not have local admin rights on %s.",
-					state.User, state.Hostname,
+					state.ActiveUser, state.ActiveHost,
 				)
 			}
 		case "has_ticket":
@@ -103,7 +98,14 @@ func checkRequires(requires []string, state *schema.SessionState, p providers.Pr
 				return "No Kerberos tickets in memory. Import a ticket first."
 			}
 		case "has_ntlm":
-			if len(state.Loot.NTLMHashes) == 0 {
+			hasHash := false
+			for _, l := range state.Loot {
+				if l.Type == "hash" {
+					hasHash = true
+					break
+				}
+			}
+			if !hasHash {
 				return "No NTLM hashes in memory."
 			}
 		default:
@@ -119,7 +121,7 @@ func shellError(msg string) schema.ToolResult {
 	return schema.ToolResult{
 		Output:      msg,
 		IsError:     true,
-		SideEffects: nil,
+		Effects: nil,
 	}
 }
 // Names returns all registered tool names in sorted order.

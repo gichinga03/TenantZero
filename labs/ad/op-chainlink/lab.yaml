@@ -1,174 +1,267 @@
-id: op-chainlink
-name: "Operation Chainlink"
-description: "Intermediate AD red team lab — GenericWrite → targeted Kerberoast → WriteDACL → DCSync. Meridian Financial Group, single forest."
+lab_id: op-chainlink
 
-domains:
-  - name: meridian.local
-    netbios: MERIDIAN
-    dc: DC01.meridian.local
-    functional_level: "2016"
+domain:
+  name: meridian.local
+  netbios: MERIDIAN
+  functional_level: "Windows Server 2019"
+  dc_hostname: DC01
+  dc_ip: "10.10.10.10"
 
-    users:
-      - username: jsmith
-        password: "Welcome1"
-        enabled: true
-        groups: [Domain Users, IT-Helpdesk]
-        description: "Helpdesk analyst"
+forests:
+  - forest_name: meridian.local
+    domains:
+      - meridian.local
+    subnets:
+      - "10.10.10.0/24"
+      - "10.10.20.0/24"
 
-      - username: svc_backup
-        password: "Backup2019!"
-        enabled: true
-        groups: [Domain Users]
-        spn: ["BackupSvc/SRV01.meridian.local"]
-        description: "Automated backup service"
+trusts: []
 
-      - username: svc_sql
-        password: "SqlServer2020!"
-        enabled: true
-        groups: [Domain Users]
-        spn: ["MSSQLSvc/SRV02.meridian.local:1433"]
-        description: "SQL Server service account"
+hosts:
+  - hostname: WKSTN01
+    forest: meridian.local
+    ip: "10.10.10.15"
+    role: workstation
+    in_scope: true
+    os: "Windows 10 Enterprise"
+    staged_tools:
+      - 'C:\tools\Rubeus.exe'
+      - 'C:\tools\PowerView.ps1'
+    reachable_from: []
+  - hostname: DC01
+    forest: meridian.local
+    ip: "10.10.10.10"
+    role: domain_controller
+    in_scope: true
+    os: "Windows Server 2019"
+    staged_tools: []
+    reachable_from:
+      - WKSTN01
+  - hostname: FILESVR01
+    forest: meridian.local
+    ip: "10.10.20.11"
+    role: file_server
+    in_scope: true
+    os: "Windows Server 2016"
+    staged_tools: []
+    reachable_from:
+      - WKSTN01
+  - hostname: HRWKSTN01
+    forest: meridian.local
+    ip: "10.10.20.25"
+    role: workstation
+    in_scope: false
+    os: "Windows 10 Enterprise"
+    staged_tools: []
+    reachable_from: []
 
-      - username: awalker
-        password: "Autumn2024!"
-        enabled: true
-        groups: [Domain Users, IT-Admins]
-        description: "Senior IT administrator"
-
-      - username: mthompson
-        password: "P@ssw0rd123"
-        enabled: true
-        groups: [Domain Users, Finance]
-        description: "Finance analyst"
-
-      - username: brajesh
-        password: "Summer2023!"
-        enabled: true
-        groups: [Domain Users, IT-Helpdesk]
-        description: "Helpdesk technician"
-
-      - username: l.anderson
-        password: "Meridian1!"
-        enabled: true
-        groups: [Domain Users, Domain Admins]
-        description: "Domain Administrator"
-
-      - username: Administrator
-        password: "M3r1d14n@dmin!"
-        enabled: true
-        groups: [Domain Users, Domain Admins]
-        description: "Built-in administrator"
-
-      - username: krbtgt
-        password: ""
-        enabled: false
-        groups: [Domain Users]
-        description: "Key Distribution Center service account"
-
+identities:
+  - account: "MERIDIAN\\jsmith"
+    forest: meridian.local
     groups:
-      - name: Domain Users
-        members: [jsmith, svc_backup, svc_sql, awalker, mthompson, brajesh, l.anderson, Administrator, krbtgt]
-      - name: Domain Admins
-        members: [l.anderson, Administrator]
-      - name: IT-Helpdesk
-        members: [jsmith, brajesh]
-      - name: IT-Admins
-        members: [awalker]
-      - name: Finance
-        members: [mthompson]
+      - Domain Users
+    spns: []
+    password: "Welcome1!"
+    nt_hash: ""
+  - account: "MERIDIAN\\awalker"
+    forest: meridian.local
+    groups:
+      - Domain Users
+      - IT Support
+    spns: []
+    password: "Autumn2024!"
+    nt_hash: ""
+  - account: "MERIDIAN\\krbtgt"
+    forest: meridian.local
+    groups:
+      - Domain Users
+    spns:
+      - "krbtgt/meridian.local"
+    password: ""
+    nt_hash: "aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0"
 
-    computers:
-      - hostname: WS01
-        ip: "10.10.10.10"
-        os: "Windows 10"
-        role: MemberServer
-        local_admins: [jsmith]
+relationships:
+  - type: can_pivot_to
+    from: WKSTN01
+    to: DC01
+    requires_account: ""
+    target_account: ""
+    trust_ref: ""
+  - type: can_pivot_to
+    from: WKSTN01
+    to: FILESVR01
+    requires_account: ""
+    target_account: ""
+    trust_ref: ""
 
-      - hostname: SRV01
-        ip: "10.10.10.20"
-        os: "Windows Server 2019"
-        role: MemberServer
-        local_admins: [svc_backup]
+users:
+  - samaccountname: jsmith
+    displayname: "John Smith"
+    password: "Welcome1!"
+    nt_hash: ""
+    groups:
+      - Domain Users
+    spns: []
+    enabled: true
+    admincount: false
+    unconstrained_delegation: false
+    password_never_expires: false
+  - samaccountname: awalker
+    displayname: "Alice Walker"
+    password: "Autumn2024!"
+    nt_hash: ""
+    groups:
+      - Domain Users
+      - IT Support
+    spns: []
+    enabled: true
+    admincount: false
+    unconstrained_delegation: false
+    password_never_expires: true
+  - samaccountname: krbtgt
+    displayname: "krbtgt"
+    password: ""
+    nt_hash: "aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0"
+    groups:
+      - Domain Users
+    spns:
+      - "krbtgt/meridian.local"
+    enabled: false
+    admincount: true
+    unconstrained_delegation: false
+    password_never_expires: true
+  - samaccountname: svc_backup
+    displayname: "Backup Service"
+    password: "BackupSvc2019!"
+    nt_hash: ""
+    groups:
+      - Domain Users
+      - Backup Operators
+    spns:
+      - "MSSQLSvc/FILESVR01.meridian.local:1433"
+    enabled: true
+    admincount: false
+    unconstrained_delegation: false
+    password_never_expires: true
 
-      - hostname: SRV02
-        ip: "10.10.20.10"
-        os: "Windows Server 2019"
-        role: MemberServer
-        local_admins: [svc_sql]
+groups:
+  - name: "Domain Users"
+    members:
+      - jsmith
+      - awalker
+      - krbtgt
+      - svc_backup
+  - name: "IT Support"
+    members:
+      - awalker
+  - name: "Backup Operators"
+    members:
+      - svc_backup
+  - name: "Domain Admins"
+    members:
+      - Administrator
 
-      - hostname: DC01
-        ip: "10.10.10.1"
-        os: "Windows Server 2019"
-        role: DomainController
-        local_admins: []
+computers:
+  - name: WKSTN01
+    dns_hostname: WKSTN01.meridian.local
+    unconstrained_delegation: false
+    operating_system: "Windows 10 Enterprise"
+  - name: DC01
+    dns_hostname: DC01.meridian.local
+    unconstrained_delegation: false
+    operating_system: "Windows Server 2019"
+  - name: FILESVR01
+    dns_hostname: FILESVR01.meridian.local
+    unconstrained_delegation: false
+    operating_system: "Windows Server 2016"
 
-    acls:
-      - from: jsmith
-        to: svc_backup
-        right: GenericWrite
+acls:
+  - from: awalker
+    to: meridian.local
+    rights: WriteDACL
+  - from: IT Support
+    to: FILESVR01
+    rights: GenericWrite
 
-      - from: awalker
-        to: meridian.local
-        right: WriteDACL
+trusts_list: []
 
-    trusts: []
-    cert_templates: []
-    delegations: []
+cert_templates: []
 
-file_system:
-  "C:\\": [tools, Windows, Users]
-  "C:\\tools": [Rubeus.exe, SharpHound.exe, PowerView.ps1, mimikatz.exe]
-  "C:\\Users": [jsmith]
-  "C:\\Users\\jsmith": [Desktop]
-  "C:\\Users\\jsmith\\Desktop": [note.txt, itwiki.txt]
+delegations: []
+
+filesystem:
+  'C:\':
+    - tools
+    - Users
+    - Windows
+  'C:\tools':
+    - Rubeus.exe
+    - PowerView.ps1
+  'C:\Users':
+    - jsmith
+  'C:\Users\jsmith':
+    - Desktop
+    - Documents
+  'C:\Users\jsmith\Desktop':
+    - itwiki.txt
 
 file_contents:
-  "C:\\Users\\jsmith\\Desktop\\itwiki.txt": "=== IT Service Account Wiki ===\nAccount: awalker\nLast updated by: awalker\nTemp password set after audit: Autumn2024!\nPlease change on next login.\n\nAccount: svc_backup\nManaged by: awalker\nSPN: BackupSvc/SRV01.meridian.local"
-  "C:\\Users\\jsmith\\Desktop\\note.txt": "Remember to check backup service account — credentials in IT wiki. IT wiki has service account passwords. awalker updated svc_backup last week."
+  'C:\Users\jsmith\Desktop\itwiki.txt':
+    data: |
+      IT Wiki — Internal Use Only
+      ===========================
+
+      Server Access Credentials (IT Support rotation — update quarterly)
+      -------------------------------------------------------------------
+      Host        : FILESVR01.meridian.local
+      Account     : MERIDIAN\awalker
+      Password    : Autumn2024!
+      Purpose     : File share administration, backup verification
+
+      Note: rotate before Q1 2025 audit window.
+    da_only: false
 
 tools:
-  available: [Rubeus.exe, SharpHound.exe, PowerView.ps1, mimikatz.exe, crackmapexec, nmap]
+  available:
+    - rubeus
+    - powerview
+    - mimikatz
+    - crackmapexec
+    - impacket
+    - sharphound
   overrides: {}
 
 win_conditions:
-  - type: command_executed
-    value: "Get-DomainUser -SPN"
-    label: "Enumerated Kerberoastable accounts"
-
-  - type: loot_check
-    value: "spn_hashes.svc_backup"
-    label: "Kerberoasted svc_backup"
-
-  - type: loot_check
-    value: "ntlm_hashes.krbtgt"
-    label: "DCSync — krbtgt hash obtained"
-
-  - type: state_check
-    value: "user == l.anderson"
-    label: "Obtained Domain Admin session (l.anderson)"
-
-  - type: state_check
-    value: "user == administrator"
-    label: "Obtained Domain Admin session (Administrator)"
-
-  - type: command_executed
-    value: "mimikatz # lsadump::dcsync /user:administrator"
-    label: "DCSync complete"
+  - id: wc-dcsync-krbtgt
+    description: "Execute DCSync and extract the krbtgt NTLM hash"
+    type: loot
+    params:
+      loot_type: hash
+      loot_value_contains: krbtgt
+    points: 100
+    required: true
 
 time:
-  session_timeout: 7200
-  token_ttl: 3600
-  mfa_prompt_after: 0
+  session_timeout_minutes: 180
+  token_ttl_minutes: 60
 
 hints:
-  - min_elapsed_minutes: 15
-    text: "Enumerate ACLs — look for non-default rights on service accounts"
-  - min_elapsed_minutes: 30
-    text: "GenericWrite on a service account with an SPN enables targeted Kerberoasting"
-  - min_elapsed_minutes: 60
-    text: "Find who has WriteDACL on the domain object — that right can be used to grant yourself DCSync"
+  - id: hint-01
+    min_elapsed_minutes: 15
+    text: "Look carefully at files on the Desktop. Credentials are often stored in plain text in IT documentation."
+  - id: hint-02
+    min_elapsed_minutes: 30
+    text: "Once you have awalker's credentials, check their AD permissions. WriteDACL on the domain object is powerful."
+  - id: hint-03
+    min_elapsed_minutes: 45
+    text: "Add-DomainObjectAcl with -Rights DCSync grants the account replication rights. Then use mimikatz lsadump::dcsync."
 
 starting_point:
-  machine: WS01
-  user: jsmith
-  privilege: local-admin
+  machine: WKSTN01
+  user: "MERIDIAN\\jsmith"
+  privilege: standard_user
+
+mail:
+  victim_email: ""
+  victim_response_delay: 0
+  link_phish: false

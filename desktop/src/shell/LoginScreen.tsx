@@ -32,7 +32,7 @@ export default function LoginScreen({ labUser, labDomain, onLogin, loginError }:
   const initial = sam.charAt(0).toUpperCase();
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') onLogin(labUser, password);
+    if (e.key === 'Enter') onLogin(sam, password);
   };
 
   const styles: Record<string, React.CSSProperties> = {
@@ -149,7 +149,7 @@ export default function LoginScreen({ labUser, labDomain, onLogin, loginError }:
         <div style={styles.arrowRow}>
           <button
             style={styles.arrowBtn}
-            onClick={() => onLogin(labUser, password)}
+            onClick={() => onLogin(sam, password)}
             onMouseOver={e => (e.currentTarget.style.background = '#106EBE')}
             onMouseOut={e => (e.currentTarget.style.background = '#0078D4')}
           >

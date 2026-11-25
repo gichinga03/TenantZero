@@ -1,14 +1,3 @@
-// Package ad implements the providers.Provider interface for Active Directory
-// lab environments. It wraps an immutable *schema.Lab and a mutable
-// *schema.SessionState, exposing a clean query surface to all engine tools.
-//
-// Design constraints:
-//   - Zero mutations — all methods are read-only. State writes go through
-//     the engine's SideEffect apply loop, never through the provider.
-//   - Case-insensitive matching throughout — AD is case-insensitive and labs
-//     should behave the same way regardless of how a tool formats identifiers.
-//   - No raw map access from tool code — tools call methods, never reach into
-//     SessionState or Lab directly.
 package ad
 
 import (
@@ -17,106 +6,226 @@ import (
 	"github.com/0x4D67/tenantzero/shared/schema"
 )
 
-// abusableRights is the set of ACL rights considered non-default and
-// exploitable. Anything outside this set is filtered by GetAbusableACLs.
-//
-// Azure equivalent: this would instead be a set of privileged Entra role
-// display names and sensitive Azure RBAC role definitions.
-var abusableRights = map[string]bool{
-	"GenericAll":          true,
-	"GenericWrite":        true,
-	"WriteDACL":           true,
-	"WriteOwner":          true,
-	"AllExtendedRights":   true,
-	"Owns":                true,
-	"ForceChangePassword": true,
-}
-
-// replicationRights is the set of ACL rights on the domain object that
-// grant MS-DRSR replication capability (DCSync).
-var replicationRights = map[string]bool{
-	"AllExtendedRights": true,
-	"GenericAll":        true,
-}
-
-// domainAdminsGroup is the canonical name of the privileged group checked
-// by HasDomainAdmin. Comparison is case-insensitive.
-const domainAdminsGroup = "domain admins"
-
-// ADProvider implements providers.Provider for an Active Directory lab.
-// It is safe for concurrent reads — no method writes to lab or state.
 type ADProvider struct {
-	lab   *schema.Lab
+	lab   schema.Lab
 	state *schema.SessionState
 }
 
-// New constructs an ADProvider. Both lab and state must be non-nil.
-// lab is treated as immutable; state is read but never written.
-func New(lab *schema.Lab, state *schema.SessionState) *ADProvider {
+func NewADProvider(lab schema.Lab, state *schema.SessionState) *ADProvider {
 	return &ADProvider{lab: lab, state: state}
 }
 
-// normalize lowercases and trims s for case-insensitive comparison.
-func normalize(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
-}
-
-// =============================================================================
-// Users
-// =============================================================================
-
-// GetUsers returns all users in the lab domain.
-func (p *ADProvider) GetUsers() []schema.User {
-	users := p.domainUsers()
-	out := make([]schema.User, len(users))
-	copy(out, users)
-	return out
-}
-
-// GetUser returns the user whose Username matches username (case-insensitive).
-func (p *ADProvider) GetUser(username string) (schema.User, bool) {
-	key := normalize(username)
-	for _, u := range p.domainUsers() {
-		if normalize(u.Username) == key {
+func (p *ADProvider) GetUser(sam string) (schema.User, bool) {
+	for _, u := range p.lab.Users {
+		if strings.EqualFold(u.SAMAccountName, sam) {
 			return u, true
 		}
 	}
 	return schema.User{}, false
 }
 
-// GetUsersWithSPN returns users that carry a ServicePrincipalName.
-// These are candidates for Kerberoasting via Rubeus or Impacket GetUserSPNs.
-func (p *ADProvider) GetUsersWithSPN() []schema.User {
-	var out []schema.User
-	for _, u := range p.domainUsers() {
-		if len(u.SPN) > 0 {
-			out = append(out, u)
+func (p *ADProvider) GetGroup(name string) (schema.Group, bool) {
+	for _, g := range p.lab.Groups {
+		if strings.EqualFold(g.Name, name) {
+			return g, true
 		}
 	}
-	return out
+	return schema.Group{}, false
 }
 
-// GetUsersWithAdminCount returns users where AdminCount is true.
-// Mirrors the adminCount attribute set by SDProp on privileged accounts.
+func (p *ADProvider) GetComputer(name string) (schema.Computer, bool) {
+	for _, c := range p.lab.Computers {
+		if strings.EqualFold(c.Name, name) {
+			return c, true
+		}
+	}
+	return schema.Computer{}, false
+}
+
+func (p *ADProvider) GetACLsFor(to string) []schema.ACL {
+	var result []schema.ACL
+	for _, acl := range p.lab.ACLs {
+		if strings.EqualFold(acl.To, to) {
+			result = append(result, acl)
+		}
+	}
+	return result
+}
+
+func (p *ADProvider) GetAllACLs() []schema.ACL {
+	return p.lab.ACLs
+}
+
+func (p *ADProvider) GetSPNUsers() []schema.User {
+	var result []schema.User
+	for _, u := range p.lab.Users {
+		if len(u.SPNs) > 0 {
+			result = append(result, u)
+		}
+	}
+	return result
+}
+
+func (p *ADProvider) GetDelegation(account string) (schema.Delegation, bool) {
+	for _, d := range p.lab.Delegations {
+		if strings.EqualFold(d.Account, account) {
+			return d, true
+		}
+	}
+	return schema.Delegation{}, false
+}
+
+func (p *ADProvider) GetCertTemplates() []schema.CertTemplate {
+	return p.lab.CertTemplates
+}
+
+func (p *ADProvider) GetCertTemplate(name string) (schema.CertTemplate, bool) {
+	for _, ct := range p.lab.CertTemplates {
+		if strings.EqualFold(ct.Name, name) {
+			return ct, true
+		}
+	}
+	return schema.CertTemplate{}, false
+}
+
+func (p *ADProvider) hasRuntimeACL(account, target, right string) bool {
+	key := strings.ToLower(account) + "." + strings.ToLower(target)
+	rights, ok := p.state.GrantedACLs[key]
+	if !ok {
+		return false
+	}
+	for _, r := range rights {
+		if strings.EqualFold(r, right) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *ADProvider) HasReplicationRights(account string) bool {
+	if p.hasRuntimeACL(account, p.lab.Domain.Name, "DCSync") {
+		return true
+	}
+	for _, acl := range p.lab.ACLs {
+		if strings.EqualFold(acl.From, account) && strings.Contains(acl.Rights, "DCSync") {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *ADProvider) GetFileSystem() schema.FileSystem {
+	return p.lab.FileSystem
+}
+
+func (p *ADProvider) GetFileContent(path string) (schema.FileContent, bool) {
+	fc, ok := p.lab.FileContents[path]
+	return fc, ok
+}
+
+func (p *ADProvider) GetDomain() schema.Domain {
+	return p.lab.Domain
+}
+
+// --- Topology methods ---
+
+func (p *ADProvider) GetHost(hostname string) (schema.Host, bool) {
+	for _, h := range p.lab.Hosts {
+		if strings.EqualFold(h.Hostname, hostname) {
+			return h, true
+		}
+	}
+	return schema.Host{}, false
+}
+
+func (p *ADProvider) GetAllHosts() []schema.Host {
+	return p.lab.Hosts
+}
+
+func (p *ADProvider) GetReachableHosts(fromHostname string) []schema.Host {
+	var result []schema.Host
+	for _, h := range p.lab.Hosts {
+		for _, rf := range h.ReachableFrom {
+			if strings.EqualFold(rf, fromHostname) {
+				result = append(result, h)
+				break
+			}
+		}
+	}
+	if result == nil {
+		result = []schema.Host{}
+	}
+	return result
+}
+
+func (p *ADProvider) GetRelationships(from string) []schema.Relationship {
+	var result []schema.Relationship
+	for _, r := range p.lab.Relationships {
+		if strings.EqualFold(r.From, from) {
+			result = append(result, r)
+		}
+	}
+	return result
+}
+
+func (p *ADProvider) GetTrust(sourceForest, targetForest string) (schema.Trust, bool) {
+	for _, t := range p.lab.Trusts {
+		if strings.EqualFold(t.SourceForest, sourceForest) && strings.EqualFold(t.TargetForest, targetForest) {
+			return t, true
+		}
+	}
+	return schema.Trust{}, false
+}
+
+func (p *ADProvider) IsInScope(hostname string) bool {
+	h, ok := p.GetHost(hostname)
+	if !ok {
+		return false
+	}
+	return h.InScope
+}
+
+func (p *ADProvider) GetForest(forestName string) (schema.Forest, bool) {
+	for _, f := range p.lab.Forests {
+		if strings.EqualFold(f.ForestName, forestName) {
+			return f, true
+		}
+	}
+	return schema.Forest{}, false
+}
+
+func (p *ADProvider) GetIdentity(account string) (schema.Identity, bool) {
+	for _, id := range p.lab.Identities {
+		if strings.EqualFold(id.Account, account) {
+			return id, true
+		}
+	}
+	return schema.Identity{}, false
+}
+
+func (p *ADProvider) DomainController() string {
+	return p.lab.Domain.DCHostname
+}
+
+func (p *ADProvider) GetUsers() []schema.User {
+	return p.lab.Users
+}
+
 func (p *ADProvider) GetUsersWithAdminCount() []schema.User {
 	var out []schema.User
-	for _, u := range p.domainUsers() {
-		if u.AdminCount > 0 {
+	for _, u := range p.lab.Users {
+		if u.AdminCount {
 			out = append(out, u)
 		}
 	}
 	return out
 }
 
-// GetUserGroups returns all groups the user is a direct member of.
-// Membership is determined by scanning each group's Members slice.
-// Does not recurse — transitive membership requires walking the result.
 func (p *ADProvider) GetUserGroups(username string) []schema.Group {
-	key := normalize(username)
 	var out []schema.Group
-	for _, g := range p.domainGroups() {
+	for _, g := range p.lab.Groups {
 		for _, m := range g.Members {
-			if normalize(m) == key {
+			if strings.EqualFold(m, username) {
 				out = append(out, g)
 				break
 			}
@@ -125,481 +234,183 @@ func (p *ADProvider) GetUserGroups(username string) []schema.Group {
 	return out
 }
 
-// =============================================================================
-// Groups
-// =============================================================================
-
-// GetGroups returns all domain groups.
 func (p *ADProvider) GetGroups() []schema.Group {
-	groups := p.domainGroups()
-	out := make([]schema.Group, len(groups))
-	copy(out, groups)
-	return out
+	return p.lab.Groups
 }
 
-// GetGroup returns the group matching name (case-insensitive).
-func (p *ADProvider) GetGroup(name string) (schema.Group, bool) {
-	key := normalize(name)
-	for _, g := range p.domainGroups() {
-		if normalize(g.Name) == key {
-			return g, true
-		}
-	}
-	return schema.Group{}, false
-}
-
-// GetGroupMembers returns all users that are direct members of the named group.
-// Group membership strings are matched against User.Username case-insensitively.
-// Nested groups are not resolved — only user objects are returned.
 func (p *ADProvider) GetGroupMembers(name string) []schema.User {
 	g, ok := p.GetGroup(name)
 	if !ok {
 		return nil
 	}
-
-	// Build a lookup set for the group's member strings.
-	memberSet := make(map[string]bool, len(g.Members))
-	for _, m := range g.Members {
-		memberSet[normalize(m)] = true
-	}
-
 	var out []schema.User
-	for _, u := range p.domainUsers() {
-		if memberSet[normalize(u.Username)] {
+	for _, m := range g.Members {
+		if u, ok := p.GetUser(m); ok {
 			out = append(out, u)
 		}
 	}
 	return out
 }
 
-// =============================================================================
-// Computers
-// =============================================================================
-
-// GetComputers returns all computers in the domain.
 func (p *ADProvider) GetComputers() []schema.Computer {
-	computers := p.domainComputers()
-	out := make([]schema.Computer, len(computers))
-	copy(out, computers)
-	return out
+	return p.lab.Computers
 }
 
-// GetComputer returns the computer matching hostname (case-insensitive).
-func (p *ADProvider) GetComputer(hostname string) (schema.Computer, bool) {
-	key := normalize(hostname)
-	for _, c := range p.domainComputers() {
-		if normalize(c.Hostname) == key {
-			return c, true
-		}
-	}
-	return schema.Computer{}, false
-}
-
-// GetDomainControllers returns all computers where IsDC is true.
 func (p *ADProvider) GetDomainControllers() []schema.Computer {
 	var out []schema.Computer
-	for _, c := range p.domainComputers() {
-		for _, r := range c.Roles {
-			if strings.EqualFold(r, "DomainController") {
-				out = append(out, c)
-				break
-			}
+	for _, c := range p.lab.Computers {
+		if strings.EqualFold(c.Name, p.lab.Domain.DCHostname) {
+			out = append(out, c)
 		}
 	}
 	return out
 }
 
-// GetLocalAdmins returns the LocalAdmins slice for the given hostname.
-// Returns nil if the hostname is not found.
 func (p *ADProvider) GetLocalAdmins(hostname string) []string {
-	c, ok := p.GetComputer(hostname)
-	if !ok {
-		return nil
-	}
-	out := make([]string, len(c.LocalAdmins))
-	copy(out, c.LocalAdmins)
-	return out
+	return []string{"Administrator"}
 }
 
-// =============================================================================
-// ACLs
-// =============================================================================
 
-// GetACLs returns all ACL entries in the lab.
-func (p *ADProvider) GetACLs() []schema.ACL {
-	acls := p.domainACLs()
-	out := make([]schema.ACL, len(acls))
-	copy(out, acls)
-	return out
-}
 
-// GetACLsFor returns ACL entries where Target matches the given name
-// (case-insensitive).
-func (p *ADProvider) GetACLsFor(target string) []schema.ACL {
-	key := normalize(target)
-	var out []schema.ACL
-	for _, a := range p.domainACLs() {
-		if normalize(a.To) == key {
-			out = append(out, a)
-		}
-	}
-	return out
-}
-
-// GetACLsFrom returns ACL entries where Principal matches the given name
-// (case-insensitive).
 func (p *ADProvider) GetACLsFrom(principal string) []schema.ACL {
-	key := normalize(principal)
 	var out []schema.ACL
-	for _, a := range p.domainACLs() {
-		if normalize(a.From) == key {
+	for _, a := range p.lab.ACLs {
+		if strings.EqualFold(a.From, principal) {
 			out = append(out, a)
 		}
 	}
 	return out
 }
 
-// GetAbusableACLs returns ACL entries with rights considered non-default and
-// exploitable. Filtered to the set defined in abusableRights.
-//
-// Azure equivalent: would scan Entra role assignments and Azure RBAC grants
-// for privileged roles (Owner, Contributor, User Access Administrator, etc.)
-// rather than AD DACL right strings.
 func (p *ADProvider) GetAbusableACLs() []schema.ACL {
+	abusable := map[string]bool{
+		"GenericAll": true, "GenericWrite": true, "WriteDACL": true,
+		"WriteOwner": true, "AllExtendedRights": true, "Owns": true,
+		"ForceChangePassword": true,
+	}
 	var out []schema.ACL
-	for _, a := range p.domainACLs() {
-		if abusableRights[a.Right] {
+	for _, a := range p.lab.ACLs {
+		if abusable[a.Rights] {
 			out = append(out, a)
 		}
 	}
 	return out
 }
 
-// =============================================================================
-// Trusts
-// =============================================================================
-
-// GetTrusts returns all trust relationships defined in the lab.
 func (p *ADProvider) GetTrusts() []schema.Trust {
-	trusts := p.domainTrusts()
-	out := make([]schema.Trust, len(trusts))
-	copy(out, trusts)
-	return out
+	return p.lab.Trusts
 }
 
-// =============================================================================
-// Delegation
-// =============================================================================
-
-// GetDelegations returns all Delegation structs across all computers in the lab.
-func (p *ADProvider) GetDelegations() []schema.Delegation {
-	return p.lab.Delegations
-}
-
-// GetUnconstrainedDelegation returns computers configured for unconstrained
-// Kerberos delegation. Domain controllers are excluded — they carry this flag
-// by default and are not meaningful targets for printer-bug TGT capture.
-//
-// Azure equivalent: unconstrained delegation has no direct Entra parallel;
-// the closest concept is Managed Identity with broad resource access.
 func (p *ADProvider) GetUnconstrainedDelegation() []schema.Computer {
 	var out []schema.Computer
-	dcSet := make(map[string]bool)
-	for _, c := range p.domainComputers() {
-		for _, r := range c.Roles {
-			if strings.EqualFold(r, "DomainController") {
-				dcSet[c.Hostname] = true
-			}
-		}
-	}
-	for _, d := range p.lab.Delegations {
-		if strings.EqualFold(d.Type, "unconstrained") {
-			for _, c := range p.domainComputers() {
-				if strings.EqualFold(c.Hostname, d.Computer) && !dcSet[c.Hostname] {
-					out = append(out, c)
-				}
-			}
+	for _, c := range p.lab.Computers {
+		if c.UnconstrainedDelegation {
+			out = append(out, c)
 		}
 	}
 	return out
 }
 
-// GetConstrainedDelegation returns Delegation entries where Type is
-// "constrained" or "resource-based". The AllowedServices slice drives
-// S4U2Proxy abuse enumeration in the Rubeus tool.
 func (p *ADProvider) GetConstrainedDelegation() []schema.Delegation {
 	var out []schema.Delegation
 	for _, d := range p.lab.Delegations {
-		t := normalize(d.Type)
-		if t == "constrained" || t == "resource-based" {
+		if strings.EqualFold(d.Type, "constrained") || strings.EqualFold(d.Type, "resource-based") {
 			out = append(out, d)
 		}
 	}
 	return out
 }
 
-// =============================================================================
-// Certificates
-// =============================================================================
-
-// GetCertTemplates returns all certificate templates defined in the lab.
-func (p *ADProvider) GetCertTemplates() []schema.CertTemplate {
-	templates := p.domainCertTemplates()
-	out := make([]schema.CertTemplate, len(templates))
-	copy(out, templates)
-	return out
-}
-
-// GetVulnerableCertTemplates returns templates where at least one ESC flag is
-// true. ESC1–ESC8 are stored as individual booleans for O(1) field access.
-//
-// Azure equivalent: would scan Entra certificate-based authentication configs
-// and app registration credential policies rather than ADCS templates.
 func (p *ADProvider) GetVulnerableCertTemplates() []schema.CertTemplate {
 	var out []schema.CertTemplate
-	for _, ct := range p.domainCertTemplates() {
-		if ct.ESC1 || ct.ESC2 || ct.ESC3 || ct.ESC4 ||
-			ct.ESC5 || ct.ESC6 || ct.ESC7 || ct.ESC8 {
+	for _, ct := range p.lab.CertTemplates {
+		if ct.ESC1 || ct.ESC2 || ct.ESC3 || ct.ESC4 || ct.ESC8 {
 			out = append(out, ct)
 		}
 	}
 	return out
 }
 
-// =============================================================================
-// Credential validation
-// =============================================================================
-
-// ValidateCredentials returns true if username:password is a valid pair.
-//
-// Resolution order:
-//  1. Lab users — checks User.Password (plaintext, set in YAML).
-//  2. SessionState.Loot.PlaintextCreds — creds captured or cracked mid-session
-//     (e.g. from a file on the virtual FS, a Mimikatz output, CME output).
-//
-// Both username and password comparisons are case-insensitive for usernames;
-// passwords are compared as-is (AD passwords are case-sensitive).
-//
-// Azure equivalent: would validate an access_token or refresh_token stored in
-// Loot rather than a plaintext password, since Entra auth is token-based.
-// A "password" check in Entra context means checking for valid ROPC flow creds
-// against a Loot entry — same structure, different semantic.
 func (p *ADProvider) ValidateCredentials(username, password string) bool {
-	key := normalize(username)
-
-	// Check lab-defined users first.
-	for _, u := range p.domainUsers() {
-		if normalize(u.Username) == key && u.Password == password {
+	for _, u := range p.lab.Users {
+		if strings.EqualFold(u.SAMAccountName, username) && u.Password == password {
 			return true
 		}
 	}
-
-	// Check plaintext creds captured during the session.
-	if pw, ok := p.state.Loot.PlaintextCreds[key]; ok && pw == password {
-		return true
+	for _, id := range p.lab.Identities {
+		if strings.EqualFold(id.Account, username) && id.Password == password {
+			return true
+		}
 	}
-
+	// Also check loot plaintext
+	for _, l := range p.state.Loot {
+		if l.Type == "plaintext" && strings.EqualFold(l.Source, username) && l.Value == password {
+			return true
+		}
+	}
 	return false
 }
 
-// ValidateNTLM returns true if username:NTHash is a valid pair in the session's
-// loot. NTLM hashes are captured by tools like Mimikatz sekurlsa::logonpasswords
-// or Impacket secretsdump and stored in SessionState.Loot.NTLMHashes.
-//
-// Hash comparison is case-insensitive (NT hashes are hex strings, mixed-case
-// is common from different dumping tools).
-//
-// Azure equivalent: would not exist in this form — Entra has no NTLM. The
-// equivalent loot validation would be checking for PRT (Primary Refresh Token)
-// or OAuth token entries in Loot.
 func (p *ADProvider) ValidateNTLM(username, hash string) bool {
-	key := normalize(username)
-	hashKey := normalize(hash)
-
-	if h, ok := p.state.Loot.NTLMHashes[key]; ok && normalize(h) == hashKey {
-		return true
+	for _, u := range p.lab.Users {
+		if strings.EqualFold(u.SAMAccountName, username) && strings.EqualFold(u.NTHash, hash) {
+			return true
+		}
+	}
+	for _, l := range p.state.Loot {
+		if l.Type == "hash" && strings.EqualFold(l.Source, username) && strings.EqualFold(l.Value, hash) {
+			return true
+		}
 	}
 	return false
 }
 
-// HasLocalAdmin returns true if username has local administrator access on
-// hostname. Two paths satisfy this:
-//  1. The computer's LocalAdmins slice contains username (direct grant, or
-//     a group name that includes the user — group expansion is not done here;
-//     tools that need group-aware local admin checks should resolve membership
-//     first via GetGroupMembers).
-//  2. HasDomainAdmin(username) is true — DA implies local admin everywhere
-//     under default GPO settings.
 func (p *ADProvider) HasLocalAdmin(username, hostname string) bool {
 	if p.HasDomainAdmin(username) {
 		return true
 	}
-
-	c, ok := p.GetComputer(hostname)
-	if !ok {
-		return false
-	}
-
-	key := normalize(username)
-	for _, a := range c.LocalAdmins {
-		if normalize(a) == key {
-			return true
+	// Check ACLs for local admin rights on the host
+	for _, a := range p.lab.ACLs {
+		if strings.EqualFold(a.From, username) && strings.EqualFold(a.To, hostname) {
+			if a.Rights == "GenericAll" || a.Rights == "LocalAdmin" {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// HasDomainAdmin returns true if username is a member of "Domain Admins"
-// through any chain of nested group membership.
-//
-// Algorithm: BFS over the group graph starting from "Domain Admins".
-// Visited set prevents infinite loops on cyclic group configs (shouldn't exist
-// in a valid YAML, but we defend against it).
-//
-// Azure equivalent: would check for Global Administrator role assignment in
-// Entra ID rather than DA group membership. The BFS isn't needed there —
-// Entra roles are not nested.
 func (p *ADProvider) HasDomainAdmin(username string) bool {
-	userKey := normalize(username)
-
-	// BFS queue holds group names to visit.
-	visited := make(map[string]bool)
-	queue := []string{domainAdminsGroup}
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-
-		if visited[current] {
-			continue
-		}
-		visited[current] = true
-
-		g, ok := p.GetGroup(current)
-		if !ok {
-			continue
-		}
-
-		for _, m := range g.Members {
-			mKey := normalize(m)
-
-			// Direct user membership check.
-			if mKey == userKey {
-				return true
-			}
-
-			// If the member name matches a group, enqueue it for expansion.
-			// We distinguish groups from users by checking the group index.
-			// A member string that matches a group name is treated as a nested group.
-			if _, isGroup := p.GetGroup(m); isGroup {
-				if !visited[mKey] {
-					queue = append(queue, mKey)
+	for _, g := range p.lab.Groups {
+		if strings.EqualFold(g.Name, "Domain Admins") {
+			for _, m := range g.Members {
+				if strings.EqualFold(m, username) {
+					return true
 				}
 			}
 		}
 	}
-
 	return false
 }
 
-// HasReplicationRights returns true if username holds AllExtendedRights or
-// GenericAll over the domain object in the lab's ACL list.
-//
-// In real AD, the domain object target is the domain DN. In the lab, ACL
-// entries targeting the domain name (FQDN) represent domain-object rights.
-// Tools use this to gate DCSync availability without requiring DA.
-//
-// Azure equivalent: would check for Directory.ReadWrite.All or similar MS Graph
-// application permissions, or Global Administrator / Privileged Role Admin
-// assignments, since Entra has no MS-DRSR equivalent.
-func (p *ADProvider) HasReplicationRights(username string) bool {
-	userKey := normalize(username)
-	domainKey := normalize(p.lab.Domains[0].Name)
-
-	for _, a := range p.domainACLs() {
-		if normalize(a.From) != userKey {
-			continue
-		}
-		if normalize(a.To) != domainKey {
-			continue
-		}
-		if replicationRights[a.Right] {
-			return true
-		}
-	}
-	return false
-}
-
-// =============================================================================
-// Domain metadata
-// =============================================================================
-
-// DomainName returns the FQDN of the primary lab domain (e.g. "corp.local").
 func (p *ADProvider) DomainName() string {
-	return p.lab.Domains[0].Name
+	return p.lab.Domain.Name
 }
 
-// DomainController returns the hostname of the first DC found in the computer
-// list. Returns an empty string if no DC is defined in the lab (invalid YAML).
-func (p *ADProvider) DomainController() string {
-	for _, c := range p.domainComputers() {
-		for _, r := range c.Roles {
-			if strings.EqualFold(r, "DomainController") {
-				return c.Hostname
-			}
+func (p *ADProvider) GetUsersWithSPN() []schema.User {
+	var out []schema.User
+	for _, u := range p.lab.Users {
+		if len(u.SPNs) > 0 {
+			out = append(out, u)
 		}
 	}
-	return ""
-}
-// =============================================================================
-// Domain data helpers — read from domains[0] where data is nested in YAML
-// =============================================================================
-
-func (p *ADProvider) domain() *schema.Domain {
-	if len(p.lab.Domains) == 0 {
-		return &schema.Domain{}
-	}
-	return &p.lab.Domains[0]
+	return out
 }
 
-func (p *ADProvider) domainUsers() []schema.User {
-	if len(p.lab.Users) > 0 {
-		return p.lab.Users
-	}
-	return p.domain().Users
+func (p *ADProvider) GetACLs() []schema.ACL {
+	return p.lab.ACLs
 }
 
-func (p *ADProvider) domainGroups() []schema.Group {
-	if len(p.lab.Groups) > 0 {
-		return p.lab.Groups
-	}
-	return p.domain().Groups
-}
-
-func (p *ADProvider) domainComputers() []schema.Computer {
-	if len(p.lab.Computers) > 0 {
-		return p.lab.Computers
-	}
-	return p.domain().Computers
-}
-
-func (p *ADProvider) domainACLs() []schema.ACL {
-	if len(p.lab.ACLs) > 0 {
-		return p.lab.ACLs
-	}
-	return p.domain().ACLs
-}
-
-func (p *ADProvider) domainTrusts() []schema.Trust {
-	if len(p.lab.Trusts) > 0 {
-		return p.lab.Trusts
-	}
-	return p.domain().Trusts
-}
-
-func (p *ADProvider) domainCertTemplates() []schema.CertTemplate {
-	if len(p.lab.CertTemplates) > 0 {
-		return p.lab.CertTemplates
-	}
-	return p.domain().CertTemplates
+func (p *ADProvider) GetDelegations() []schema.Delegation {
+	return p.lab.Delegations
 }

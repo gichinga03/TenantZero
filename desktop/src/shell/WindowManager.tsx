@@ -32,11 +32,16 @@ interface WindowState {
   zIndex: number;
 }
 
-export default function WindowManager({ onLock }: { onLock: () => void }) {
-  const [openWindows, setOpenWindows] = useState<WindowState[]>([]);
+interface WindowManagerProps {
+  onLock: () => void;
+  token: string;
+}
+
+export default function WindowManager({ onLock, token }: WindowManagerProps) {
+  const [openWindows,    setOpenWindows]    = useState<WindowState[]>([]);
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
-  const [zCounter, setZCounter] = useState(100);
-  const [notepadFile, setNotepadFile] = useState('');
+  const [zCounter,       setZCounter]       = useState(100);
+  const [notepadFile,    setNotepadFile]    = useState('');
 
   const openApp = useCallback((appId: string) => {
     setOpenWindows(prev => {
@@ -48,12 +53,7 @@ export default function WindowManager({ onLock }: { onLock: () => void }) {
         return prev.map(w => w.id === existing.id ? { ...w, minimized: false, zIndex: newZ } : w);
       }
       const newZ = Date.now();
-      const newWin: WindowState = {
-        id: crypto.randomUUID(),
-        appId,
-        minimized: false,
-        zIndex: newZ,
-      };
+      const newWin: WindowState = { id: crypto.randomUUID(), appId, minimized: false, zIndex: newZ };
       setActiveWindowId(newWin.id);
       setZCounter(newZ);
       return [...prev, newWin];
@@ -137,6 +137,7 @@ export default function WindowManager({ onLock }: { onLock: () => void }) {
             style={{ zIndex: win.zIndex }}
           >
             <AppComponent
+              token={win.appId === 'alloynet' ? token : undefined}
               onOpenFile={win.appId === 'fileexplorer' ? openNotepad : undefined}
               filePath={win.appId === 'notepad' ? notepadFile : undefined}
             />
