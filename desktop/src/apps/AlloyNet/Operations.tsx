@@ -226,6 +226,7 @@ export default function Operations({ token }: OperationsProps) {
         { type: 'info', text: '' },
       ])
       setSending(false)
+      setTimeout(() => inputRef.current?.focus(), 0)
     }
     if (lastMessage.type === 'error') {
       setLines(prev => [
@@ -234,6 +235,7 @@ export default function Operations({ token }: OperationsProps) {
         { type: 'info', text: '' },
       ])
       setSending(false)
+      setTimeout(() => inputRef.current?.focus(), 0)
     }
   }, [lastMessage])
 
@@ -306,6 +308,7 @@ export default function Operations({ token }: OperationsProps) {
       await new Promise(r => setTimeout(r, delay))
       setLines(prev => [...prev, { type: 'info', text: '[*] (offline) task simulated' }, ...resp, { type: 'info', text: '' }])
       setSending(false)
+      inputRef.current?.focus()
       return
     }
     wsSend(cmd, activeBeacon.id)
