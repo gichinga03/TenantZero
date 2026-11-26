@@ -204,6 +204,7 @@ export default function Operations({ token }: OperationsProps) {
   const [sending,       setSending]       = useState(false)
   const [cmdHistory,    setCmdHistory]    = useState<string[]>([])
   const [histIdx,       setHistIdx]       = useState(-1)
+  const beaconLinesRef = useRef<Map<string, Line[]>>(new Map())
   const [lines,         setLines]         = useState<Line[]>([
     { type: 'info', text: '[*] AlloyNet C2 — operator console ready' },
     { type: 'info', text: '[*] Select a session above to begin interacting' },
@@ -328,19 +329,29 @@ export default function Operations({ token }: OperationsProps) {
   }, [ctxMenu])
 
   function selectBeacon(b: Beacon) {
+    // Save current beacon's console history before switching
+    if (activeBeacon) {
+      beaconLinesRef.current.set(activeBeacon.id, lines)
+    }
     setActiveBeacon(b)
     wsSwitchBeacon(b.id)
-    setLines([
-      { type: 'info', text: `[*] ─────────────────────────────────────────────────────` },
-      { type: 'info', text: `[*] Session   ${b.id.slice(0, 13)}…` },
-      { type: 'info', text: `[*] Host      ${b.hostname}` },
-      { type: 'info', text: `[*] User      ${b.username}  (${b.integrity})` },
-      { type: 'info', text: `[*] Internal  ${b.internalIp}` },
-      { type: 'info', text: `[*] OS        ${b.os} / ${b.architecture}  PID: ${b.pid}` },
-      { type: 'info', text: `[*] Sleep     ${b.sleep}s ±${b.jitter}%` },
-      { type: 'info', text: `[*] ─────────────────────────────────────────────────────` },
-      { type: 'info', text: '' },
-    ])
+    // Restore target beacon's history, or show banner if first visit
+    const saved = beaconLinesRef.current.get(b.id)
+    if (saved) {
+      setLines(saved)
+    } else {
+      setLines([
+        { type: 'info', text: `[*] ─────────────────────────────────────────────────────` },
+        { type: 'info', text: `[*] Session   ${b.id.slice(0, 13)}…` },
+        { type: 'info', text: `[*] Host      ${b.hostname}` },
+        { type: 'info', text: `[*] User      ${b.username}  (${b.integrity})` },
+        { type: 'info', text: `[*] Internal  ${b.internalIp}` },
+        { type: 'info', text: `[*] OS        ${b.os} / ${b.architecture}  PID: ${b.pid}` },
+        { type: 'info', text: `[*] Sleep     ${b.sleep}s ±${b.jitter}%` },
+        { type: 'info', text: `[*] ─────────────────────────────────────────────────────` },
+        { type: 'info', text: '' },
+      ])
+    }
     inputRef.current?.focus()
   }
 
