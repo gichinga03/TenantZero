@@ -7,18 +7,28 @@ import (
 	"github.com/0x4D67/tenantzero/shared/schema"
 )
 
-// Parse tokenises raw into a ParsedCommand. It handles five input dialects:
+// Parse tokenises raw into a ParsedCommand. It handles eight input dialects:
 //
-//  1. Standard tools:  "rubeus.exe kerberoast /user:svc_sql /nowrap"
-//  2. PowerView:       "Get-DomainUser -Identity svc_sql"  (no binary wrapper)
-//  3. Mimikatz:        "mimikatz # sekurlsa::logonpasswords"
-//  4. Impacket:        "secretsdump.py CORP/admin:pass@dc01"
-//  5. Shell builtins:  "cd C:\Users\Public"
+//  1. Standard tools:        "rubeus.exe kerberoast /user:svc_sql /nowrap"
+//  2. PowerView:             "Get-DomainUser -Identity svc_sql"
+//  3. Mimikatz:              "mimikatz # sekurlsa::logonpasswords"
+//  4. Impacket:              "secretsdump.py CORP/admin:pass@dc01"
+//  5. Shell builtins:        "cd C:\Users\Public"
+//  6. execute-assembly:      "execute-assembly /path/Rubeus.exe kerberoast /nowrap"
+//  7. shell prefix:          "shell whoami /all"
+//  8. powershell/psh prefix: "powershell Get-DomainUser -SPN"
 func Parse(raw string) schema.ParsedCommand {
 	raw = strings.TrimSpace(raw)
 	cmd := schema.ParsedCommand{Raw: raw}
 	if raw == "" {
 		return cmd
+	}
+
+	// --- C2 prefixes: strip the wrapper and re-parse the inner command ---
+	if stripped, ok := stripC2Prefix(raw); ok {
+		inner := Parse(stripped)
+		inner.Raw = raw // preserve original for journal/win-condition matching
+		return inner
 	}
 
 	// --- mimikatz: "mimikatz # module::command [args]" ---
@@ -34,9 +44,13 @@ func Parse(raw string) schema.ParsedCommand {
 	first := tokens[0]
 
 	// --- PowerView: binary is a known Get-*/Set-*/Add-* verb ---
+	// In C2 mode these MUST be prefixed with "powershell" or "psh".
+	// Bare invocation returns an unrecognised-command marker so the
+	// registry can emit a realistic "not recognised" error.
 	if isPowerViewVerb(first) {
 		cmd.Executable = normaliseBinary(first)
 		return parseFlags(cmd, tokens[1:])
+		return cmd
 	}
 
 	// --- everything else: first token is the binary ---
@@ -50,6 +64,64 @@ func Parse(raw string) schema.ParsedCommand {
 	}
 
 	return parseFlags(cmd, rest)
+}
+
+// stripC2Prefix detects and strips Cobalt Strike / Havoc style C2 prefixes,
+// returning the inner command string and true when a prefix is matched.
+//
+//   execute-assembly /tools/Rubeus.exe kerberoast → "rubeus.exe kerberoast"  (path stripped)
+//   shell whoami /all                             → "whoami /all"
+//   powershell Get-DomainUser -SPN               → "Get-DomainUser -SPN"
+//   psh Get-DomainUser -SPN                      → "Get-DomainUser -SPN"
+//   inline-execute /bofs/inject.o <args>         → "<args>"  (BOF name stripped)
+func stripC2Prefix(raw string) (string, bool) {
+	lower := strings.ToLower(raw)
+
+	// execute-assembly /path/to/Tool.exe [args...]
+	// Strip the prefix and the path token, leaving "Tool.exe [args...]"
+	if strings.HasPrefix(lower, "execute-assembly") {
+		rest := strings.TrimSpace(raw[len("execute-assembly"):])
+		tokens := tokenise(rest)
+		if len(tokens) == 0 {
+			return "", true // empty inner — still recognised
+		}
+		// tokens[0] is the assembly path; extract just the filename
+		pathTok := tokens[0]
+		// split on both / and backslash
+		if idx := strings.LastIndexAny(pathTok, `/\\`); idx >= 0 {
+			pathTok = pathTok[idx+1:]
+		}
+		inner := pathTok
+		if len(tokens) > 1 {
+			inner = inner + " " + strings.Join(tokens[1:], " ")
+		}
+		return inner, true
+	}
+
+	// shell <cmd>  — passes through to builtins / registry as-is
+	if strings.HasPrefix(lower, "shell ") {
+		return strings.TrimSpace(raw[len("shell "):]), true
+	}
+
+	// powershell <cmdlet>  or  psh <cmdlet>
+	if strings.HasPrefix(lower, "powershell ") {
+		return strings.TrimSpace(raw[len("powershell "):]), true
+	}
+	if strings.HasPrefix(lower, "psh ") {
+		return strings.TrimSpace(raw[len("psh "):]), true
+	}
+
+	// inline-execute /path/bof.o [args] — strip prefix + BOF path, keep args
+	if strings.HasPrefix(lower, "inline-execute") {
+		rest := strings.TrimSpace(raw[len("inline-execute"):])
+		tokens := tokenise(rest)
+		if len(tokens) <= 1 {
+			return "inline-execute", true
+		}
+		return strings.Join(tokens[1:], " "), true
+	}
+
+	return "", false
 }
 
 // isMimikatz returns true for the "mimikatz # …" shell-within-a-shell syntax.
@@ -252,9 +324,45 @@ func (s *Session) Dispatch(cmd schema.ParsedCommand) schema.ToolResult {
 		return s.dispatchBuiltin(cmd)
 	}
 
-	return s.Registry.Dispatch(cmd, &s.State, s.Provider, s.Lab.Tools.Overrides)
-}
+	// Bare .exe binary — must be wrapped in execute-assembly.
+	{
+		rawLower := strings.ToLower(strings.TrimSpace(cmd.Raw))
+		toks := strings.Fields(rawLower)
+		if len(toks) > 0 && strings.HasSuffix(toks[0], ".exe") && !strings.HasPrefix(rawLower, "execute-assembly ") {
+			return schema.ToolResult{Output: fmt.Sprintf("[-] '%s' is not a recognized internal command.\r\n[*] Use 'execute-assembly C:\\tools\\%s <args>' to run .NET assemblies.", toks[0], toks[0])}
+		}
+		// Validate execute-assembly path against staged_tools for current host.
+		if strings.HasPrefix(rawLower, "execute-assembly ") && len(toks) > 1 {
+			assemblyPath := toks[1]
+			stagedOK := false
+			for _, host := range s.Lab.Hosts {
+				if strings.EqualFold(host.Hostname, s.State.ActiveHost) {
+					for _, staged := range host.StagedTools {
+						if strings.EqualFold(strings.ToLower(staged), assemblyPath) {
+							stagedOK = true
+						}
+					}
+				}
+			}
+			if !stagedOK {
+				return schema.ToolResult{Output: fmt.Sprintf("[-] Assembly not found: %s\r\n[*] Staged tools on %s: C:\\tools\\Rubeus.exe, C:\\tools\\mimikatz.exe", toks[1], s.State.ActiveHost)}
+			}
+		}
+	}
 
+
+
+	if isPowerViewVerb(cmd.Executable) {
+		rawLower := strings.ToLower(strings.TrimSpace(cmd.Raw))
+		isPrefixed := strings.HasPrefix(rawLower, "powershell ") || strings.HasPrefix(rawLower, "psh ") || strings.HasPrefix(rawLower, "execute-assembly ")
+		if !isPrefixed {
+			return schema.ToolResult{Output: fmt.Sprintf("'%s' is not recognized as the name of a cmdlet, function, script file, or operable program.\r\nHint: use 'powershell %s ...' to run PowerShell cmdlets through the beacon.", cmd.Executable, cmd.Executable)}
+		}
+	}
+
+	return s.Registry.Dispatch(cmd, &s.State, s.Provider, s.Lab.Tools.Overrides)
+
+}
 // dispatchBuiltin handles all shell-level commands without touching the tool
 // registry.
 func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
@@ -311,7 +419,11 @@ func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
 
 	case "whoami":
 		domain := strings.ToUpper(strings.SplitN(s.Lab.Domain.Name, ".", 2)[0])
+		// ActiveUser may already contain "DOMAIN\user" — strip it
 		user := s.State.ActiveUser
+		if idx := strings.LastIndex(user, `\`); idx >= 0 {
+			user = user[idx+1:]
+		}
 		if hasFlag(cmd.Flags, "all") || hasFlag(cmd.Flags, "a") {
 			return schema.ToolResult{Output: whoamiAll(domain, user, s.Lab, &s.State)}
 		}
