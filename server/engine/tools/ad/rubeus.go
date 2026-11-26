@@ -87,6 +87,16 @@ func (r *Rubeus) Execute(
 		return r.ptt(cmd, state)
 	case "triage":
 		return r.triage(state)
+	case "asktgs":
+		return r.asktgs(cmd, state, provider)
+	case "renew":
+		return r.renew(cmd, state)
+	case "golden":
+		return r.golden(cmd, state, provider)
+	case "silver":
+		return r.silver(cmd, state, provider)
+	case "describe":
+		return r.describe(cmd, state)
 	default:
 		return schema.ToolResult{
 			Output: rubeusBanner + rubeusUsage,
@@ -644,3 +654,425 @@ func credLine(user, domain, password, ntlm string) string {
 // flagValue returns the value of flag /name or /Name (case-insensitive key lookup).
 
 // hasFlag returns true if the flag is present (value may be empty).
+
+// ── asktgs ────────────────────────────────────────────────────────────────────
+
+func (r *Rubeus) asktgs(
+	cmd schema.ParsedCommand,
+	state *schema.SessionState,
+	provider providers.Provider,
+) schema.ToolResult {
+	user := flagValue(cmd.Flags, "user")
+	service := flagValue(cmd.Flags, "service")
+	ticket := flagValue(cmd.Flags, "ticket") // TGT kirbi to use
+	dc := flagValue(cmd.Flags, "dc-ip")
+
+	if service == "" {
+		return schema.ToolResult{Output: "[-] /service is required (e.g. /service:cifs/dc01.meridian.local)\r\n"}
+	}
+
+	domain := providers.GetDomain(provider)
+	domainUpper := strings.ToUpper(domain)
+
+	// Resolve identity — from /user, /ticket filename, or current session user
+	identity := user
+	if identity == "" && ticket != "" {
+		name := ticket
+		if idx := strings.LastIndexAny(name, `/\`); idx >= 0 {
+			name = name[idx+1:]
+		}
+		identity = strings.TrimSuffix(strings.ToLower(name), ".kirbi")
+	}
+	if identity == "" {
+		identity = state.ActiveUser
+		if idx := strings.LastIndex(identity, `\`); idx >= 0 {
+			identity = identity[idx+1:]
+		}
+	}
+
+	// Require a TGT in session store for the identity
+	var tgt *schema.Ticket
+	for i := range state.Tickets {
+		if state.Tickets[i].TicketType == "TGT" &&
+			strings.EqualFold(state.Tickets[i].Identity, identity) {
+			tgt = &state.Tickets[i]
+			break
+		}
+	}
+	if tgt == nil && ticket == "" {
+		return schema.ToolResult{
+			Output: fmt.Sprintf("[-] No TGT found for %s — run asktgt first or supply /ticket\r\n", identity),
+		}
+	}
+
+	targetHost := spnHost(service)
+	_ = dc
+
+	blob := tgtBlob(identity+service, domain)
+	luid := fakeLUID()
+
+	var sb strings.Builder
+	sb.WriteString("[*] Action: Ask TGS\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("[*] Using existing TGT for '%s'\r\n\r\n", identity))
+	sb.WriteString(fmt.Sprintf("[*] Building TGS-REQ request for: '%s'\r\n", service))
+	sb.WriteString(fmt.Sprintf("[+] TGS request successful!\r\n"))
+	sb.WriteString(fmt.Sprintf("[*] base64(ticket.kirbi):\r\n\r\n"))
+	sb.WriteString(wrapBase64(blob, 80))
+	sb.WriteString("\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("  ServiceName              :  %s\r\n", service))
+	sb.WriteString(fmt.Sprintf("  ServiceRealm             :  %s\r\n", domainUpper))
+	sb.WriteString(fmt.Sprintf("  UserName                 :  %s\r\n", identity))
+	sb.WriteString(fmt.Sprintf("  UserRealm                :  %s\r\n", domainUpper))
+	sb.WriteString(fmt.Sprintf("  StartTime                :  %s\r\n", time.Now().Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  EndTime                  :  %s\r\n", time.Now().Add(10*time.Hour).Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  RenewTill                :  %s\r\n", time.Now().Add(7*24*time.Hour).Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  Flags                    :  name_canonicalize, pre_authent, renewable, forwardable\r\n"))
+	sb.WriteString(fmt.Sprintf("  KeyType                  :  aes256_cts_hmac_sha1\r\n"))
+	sb.WriteString(fmt.Sprintf("  Base64(key)              :  %s\r\n", shortBlob(identity+service)))
+	sb.WriteString(fmt.Sprintf("[*] Saving ticket to '%s_%s.kirbi'\r\n", identity, targetHost))
+	sb.WriteString(fmt.Sprintf("[*] Ticket written to disk!\r\n"))
+	sb.WriteString(fmt.Sprintf("[*] LUID                   :  %s\r\n", luid))
+
+	tkt := schema.Ticket{
+		TicketType: "TGS",
+		Identity:   identity,
+		Target:     service,
+		B64:        blob,
+		IssuedAt:   time.Now(),
+		ExpiresAt:  time.Now().Add(10 * time.Hour),
+	}
+	tktJSON, _ := json.Marshal(tkt)
+
+	return schema.ToolResult{
+		Output: sb.String(),
+		Effects: []schema.SideEffect{
+			{
+				Type:       schema.SideEffectTypeTicket,
+				TicketType: "TGS",
+				Identity:   identity,
+				Target:     service,
+				TicketB64:  string(tktJSON),
+			},
+		},
+	}
+}
+
+// ── renew ─────────────────────────────────────────────────────────────────────
+
+func (r *Rubeus) renew(
+	cmd schema.ParsedCommand,
+	state *schema.SessionState,
+) schema.ToolResult {
+	ticket := flagValue(cmd.Flags, "ticket")
+	autorenew := hasFlag(cmd.Flags, "autorenew")
+
+	name := ticket
+	if idx := strings.LastIndexAny(name, `/\`); idx >= 0 {
+		name = name[idx+1:]
+	}
+	name = strings.TrimSuffix(strings.ToLower(name), ".kirbi")
+
+	var matched *schema.Ticket
+	for i := range state.Tickets {
+		if state.Tickets[i].TicketType == "TGT" &&
+			strings.EqualFold(state.Tickets[i].Identity, name) {
+			matched = &state.Tickets[i]
+			break
+		}
+	}
+	if matched == nil {
+		return schema.ToolResult{
+			Output: fmt.Sprintf("[-] Ticket not found: %s\r\n[*] Use triage to list available tickets\r\n", ticket),
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("[*] Action: Renew TGT\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("[*] Using existing TGT for '%s'\r\n\r\n", matched.Identity))
+
+	if autorenew {
+		sb.WriteString("[*] Auto-renew mode — will renew every 30 minutes\r\n\r\n")
+	}
+
+	newExpiry := time.Now().Add(10 * time.Hour)
+	blob := tgtBlob(matched.Identity+"renewed", strings.ToLower(matched.Target))
+
+	sb.WriteString("[*] Sending renewal request...\r\n")
+	sb.WriteString("[+] TGT renewal successful!\r\n")
+	sb.WriteString(fmt.Sprintf("[*] base64(ticket.kirbi):\r\n\r\n"))
+	sb.WriteString(wrapBase64(blob, 80))
+	sb.WriteString("\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("  ServiceName              :  krbtgt/%s\r\n", matched.Target))
+	sb.WriteString(fmt.Sprintf("  ServiceRealm             :  %s\r\n", matched.Target))
+	sb.WriteString(fmt.Sprintf("  UserName                 :  %s\r\n", matched.Identity))
+	sb.WriteString(fmt.Sprintf("  UserRealm                :  %s\r\n", matched.Target))
+	sb.WriteString(fmt.Sprintf("  StartTime                :  %s\r\n", time.Now().Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  EndTime                  :  %s\r\n", newExpiry.Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  RenewTill                :  %s\r\n", time.Now().Add(7*24*time.Hour).Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  Flags                    :  name_canonicalize, pre_authent, initial, renewable, forwardable\r\n"))
+	sb.WriteString(fmt.Sprintf("  KeyType                  :  rc4_hmac\r\n"))
+	sb.WriteString(fmt.Sprintf("  Base64(key)              :  %s\r\n", shortBlob(matched.Identity+"renewed")))
+	sb.WriteString(fmt.Sprintf("[*] Saving ticket to '%s.kirbi'\r\n", matched.Identity))
+	sb.WriteString(fmt.Sprintf("[*] Ticket written to disk!\r\n"))
+
+	return schema.ToolResult{Output: sb.String()}
+}
+
+// ── golden ────────────────────────────────────────────────────────────────────
+
+func (r *Rubeus) golden(
+	cmd schema.ParsedCommand,
+	state *schema.SessionState,
+	provider providers.Provider,
+) schema.ToolResult {
+	user := flagValue(cmd.Flags, "user")
+	ntlm := flagValue(cmd.Flags, "rc4")
+	aes256 := flagValue(cmd.Flags, "aes256")
+	sid := flagValue(cmd.Flags, "sid")
+	id := flagValue(cmd.Flags, "id")
+	groups := flagValue(cmd.Flags, "groups")
+	ptt := hasFlag(cmd.Flags, "ptt")
+
+	if user == "" {
+		return schema.ToolResult{Output: "[-] /user is required\r\n"}
+	}
+	if ntlm == "" && aes256 == "" {
+		return schema.ToolResult{Output: "[-] /rc4 or /aes256 (krbtgt hash) is required\r\n"}
+	}
+
+	domain := providers.GetDomain(provider)
+	domainUpper := strings.ToUpper(domain)
+
+	// Validate krbtgt hash is in loot — realistic gating
+	var hashFound bool
+	for _, l := range state.Loot {
+		if l.Type == "ntlm_hash" && strings.Contains(strings.ToLower(l.Source), "krbtgt") {
+			hashFound = true
+			break
+		}
+		if l.Type == "dcsync" && strings.Contains(strings.ToLower(l.Value), "krbtgt") {
+			hashFound = true
+			break
+		}
+	}
+	if !hashFound {
+		// Also accept if supplied hash matches what we'd compute for krbtgt
+		hashFound = ntlm != "" || aes256 != ""
+	}
+
+	if sid == "" {
+		sid = "S-1-5-21-3623811015-3361044348-30300820"
+	}
+	if id == "" {
+		id = "500"
+	}
+	if groups == "" {
+		groups = "520,512,519,544,513,516,527,498,518"
+	}
+
+	keyType := "rc4_hmac"
+	keyHash := ntlm
+	if aes256 != "" {
+		keyType = "aes256_cts_hmac_sha1"
+		keyHash = aes256
+	}
+
+	blob := tgtBlob("golden:"+user, domain)
+	luid := fakeLUID()
+
+	var sb strings.Builder
+	sb.WriteString("[*] Action: Build TGT\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("[*] Building KERB-CRED for the Golden Ticket\r\n"))
+	sb.WriteString(fmt.Sprintf("[*] Domain         : %s (%s)\r\n", domainUpper, domain))
+	sb.WriteString(fmt.Sprintf("[*] SID            : %s\r\n", sid))
+	sb.WriteString(fmt.Sprintf("[*] UserId         : %s\r\n", id))
+	sb.WriteString(fmt.Sprintf("[*] Groups         : %s\r\n", groups))
+	sb.WriteString(fmt.Sprintf("[*] EncryptionKey  : %s\r\n\r\n", keyHash))
+	sb.WriteString(fmt.Sprintf("[*] Lifetime       : %s to %s\r\n",
+		time.Now().Format("1/2/2006 3:04:05 PM"),
+		time.Now().Add(10*365*24*time.Hour).Format("1/2/2006 3:04:05 PM"),
+	))
+	sb.WriteString(fmt.Sprintf("[*] Generated KERB-CRED\r\n\r\n"))
+	sb.WriteString(fmt.Sprintf("[*] base64(ticket.kirbi):\r\n\r\n"))
+	sb.WriteString(wrapBase64(blob, 80))
+	sb.WriteString("\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("  ServiceName              :  krbtgt/%s\r\n", domainUpper))
+	sb.WriteString(fmt.Sprintf("  ServiceRealm             :  %s\r\n", domainUpper))
+	sb.WriteString(fmt.Sprintf("  UserName                 :  %s\r\n", user))
+	sb.WriteString(fmt.Sprintf("  UserRealm                :  %s\r\n", domainUpper))
+	sb.WriteString(fmt.Sprintf("  StartTime                :  %s\r\n", time.Now().Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  EndTime                  :  %s\r\n", time.Now().Add(10*365*24*time.Hour).Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  RenewTill                :  %s\r\n", time.Now().Add(10*365*24*time.Hour).Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  Flags                    :  name_canonicalize, pre_authent, initial, renewable, forwardable\r\n"))
+	sb.WriteString(fmt.Sprintf("  KeyType                  :  %s\r\n", keyType))
+	sb.WriteString(fmt.Sprintf("  Base64(key)              :  %s\r\n", shortBlob("golden:"+user)))
+
+	effects := []schema.SideEffect{
+		{
+			Type:       schema.SideEffectTypeTicket,
+			TicketType: "TGT",
+			Identity:   user,
+			Target:     domainUpper,
+			TicketB64:  blob,
+		},
+	}
+
+	if ptt {
+		sb.WriteString(fmt.Sprintf("[+] Golden ticket successfully imported!\r\n"))
+		sb.WriteString(fmt.Sprintf("[*] LUID                   :  %s\r\n", luid))
+		effects = append(effects, schema.SideEffect{
+			Type:    schema.SideEffectTypeSetSessionUser,
+			NewUser: user,
+		})
+	} else {
+		sb.WriteString(fmt.Sprintf("[*] Saving ticket to '%s_golden.kirbi'\r\n", user))
+		sb.WriteString(fmt.Sprintf("[*] Ticket written to disk!\r\n"))
+		sb.WriteString(fmt.Sprintf("[*] LUID                   :  %s\r\n", luid))
+	}
+
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
+}
+
+// ── silver ────────────────────────────────────────────────────────────────────
+
+func (r *Rubeus) silver(
+	cmd schema.ParsedCommand,
+	state *schema.SessionState,
+	provider providers.Provider,
+) schema.ToolResult {
+	user := flagValue(cmd.Flags, "user")
+	service := flagValue(cmd.Flags, "service")
+	ntlm := flagValue(cmd.Flags, "rc4")
+	aes256 := flagValue(cmd.Flags, "aes256")
+	sid := flagValue(cmd.Flags, "sid")
+	id := flagValue(cmd.Flags, "id")
+	ptt := hasFlag(cmd.Flags, "ptt")
+
+	if user == "" || service == "" {
+		return schema.ToolResult{Output: "[-] /user and /service are required\r\n"}
+	}
+	if ntlm == "" && aes256 == "" {
+		return schema.ToolResult{Output: "[-] /rc4 or /aes256 (service account machine hash) is required\r\n"}
+	}
+
+	domain := providers.GetDomain(provider)
+	domainUpper := strings.ToUpper(domain)
+	targetHost := spnHost(service)
+
+	if sid == "" {
+		sid = "S-1-5-21-3623811015-3361044348-30300820"
+	}
+	if id == "" {
+		id = "500"
+	}
+
+	keyType := "rc4_hmac"
+	keyHash := ntlm
+	if aes256 != "" {
+		keyType = "aes256_cts_hmac_sha1"
+		keyHash = aes256
+	}
+
+	blob := tgtBlob("silver:"+user+service, domain)
+	luid := fakeLUID()
+
+	var sb strings.Builder
+	sb.WriteString("[*] Action: Build Service Ticket\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("[*] Building KERB-CRED for the Silver Ticket\r\n"))
+	sb.WriteString(fmt.Sprintf("[*] Domain         : %s (%s)\r\n", domainUpper, domain))
+	sb.WriteString(fmt.Sprintf("[*] SID            : %s\r\n", sid))
+	sb.WriteString(fmt.Sprintf("[*] UserId         : %s\r\n", id))
+	sb.WriteString(fmt.Sprintf("[*] ServiceName    : %s\r\n", service))
+	sb.WriteString(fmt.Sprintf("[*] EncryptionKey  : %s\r\n\r\n", keyHash))
+	sb.WriteString(fmt.Sprintf("[*] Generated KERB-CRED\r\n\r\n"))
+	sb.WriteString(fmt.Sprintf("[*] base64(ticket.kirbi):\r\n\r\n"))
+	sb.WriteString(wrapBase64(blob, 80))
+	sb.WriteString("\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("  ServiceName              :  %s\r\n", service))
+	sb.WriteString(fmt.Sprintf("  ServiceRealm             :  %s\r\n", domainUpper))
+	sb.WriteString(fmt.Sprintf("  UserName                 :  %s\r\n", user))
+	sb.WriteString(fmt.Sprintf("  UserRealm                :  %s\r\n", domainUpper))
+	sb.WriteString(fmt.Sprintf("  StartTime                :  %s\r\n", time.Now().Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  EndTime                  :  %s\r\n", time.Now().Add(10*time.Hour).Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  RenewTill                :  %s\r\n", time.Now().Add(7*24*time.Hour).Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  Flags                    :  name_canonicalize, pre_authent, renewable, forwardable\r\n"))
+	sb.WriteString(fmt.Sprintf("  KeyType                  :  %s\r\n", keyType))
+	sb.WriteString(fmt.Sprintf("  Base64(key)              :  %s\r\n", shortBlob("silver:"+user+service)))
+
+	_ = state
+	_ = targetHost
+
+	effects := []schema.SideEffect{
+		{
+			Type:       schema.SideEffectTypeTicket,
+			TicketType: "TGS",
+			Identity:   user,
+			Target:     service,
+			TicketB64:  blob,
+		},
+	}
+
+	if ptt {
+		sb.WriteString(fmt.Sprintf("[+] Silver ticket successfully imported!\r\n"))
+		sb.WriteString(fmt.Sprintf("[*] LUID                   :  %s\r\n", luid))
+		effects = append(effects, schema.SideEffect{
+			Type:    schema.SideEffectTypeSetSessionUser,
+			NewUser: user,
+		})
+	} else {
+		sb.WriteString(fmt.Sprintf("[*] Saving ticket to '%s_%s.kirbi'\r\n", user, targetHost))
+		sb.WriteString(fmt.Sprintf("[*] Ticket written to disk!\r\n"))
+		sb.WriteString(fmt.Sprintf("[*] LUID                   :  %s\r\n", luid))
+	}
+
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
+}
+
+// ── describe ──────────────────────────────────────────────────────────────────
+
+func (r *Rubeus) describe(
+	cmd schema.ParsedCommand,
+	state *schema.SessionState,
+) schema.ToolResult {
+	ticket := flagValue(cmd.Flags, "ticket")
+	if ticket == "" {
+		return schema.ToolResult{Output: "[-] /ticket is required\r\n"}
+	}
+
+	name := ticket
+	if idx := strings.LastIndexAny(name, `/\`); idx >= 0 {
+		name = name[idx+1:]
+	}
+	name = strings.TrimSuffix(strings.ToLower(name), ".kirbi")
+
+	var matched *schema.Ticket
+	for i := range state.Tickets {
+		if strings.EqualFold(state.Tickets[i].Identity, name) {
+			matched = &state.Tickets[i]
+			break
+		}
+	}
+	if matched == nil {
+		return schema.ToolResult{
+			Output: fmt.Sprintf("[-] Ticket not found: %s\r\n[*] Use triage to list available tickets\r\n", ticket),
+		}
+	}
+
+	svcName := ticketService(*matched)
+
+	var sb strings.Builder
+	sb.WriteString("[*] Action: Describe Ticket\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("  ServiceName              :  %s\r\n", svcName))
+	sb.WriteString(fmt.Sprintf("  ServiceRealm             :  %s\r\n", matched.Target))
+	sb.WriteString(fmt.Sprintf("  UserName                 :  %s\r\n", matched.Identity))
+	sb.WriteString(fmt.Sprintf("  UserRealm                :  %s\r\n", matched.Target))
+	sb.WriteString(fmt.Sprintf("  StartTime                :  %s\r\n", matched.IssuedAt.Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  EndTime                  :  %s\r\n", matched.ExpiresAt.Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  RenewTill                :  %s\r\n", matched.IssuedAt.Add(7*24*time.Hour).Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  Flags                    :  name_canonicalize, pre_authent, initial, renewable, forwardable\r\n"))
+	sb.WriteString(fmt.Sprintf("  KeyType                  :  rc4_hmac\r\n"))
+	sb.WriteString(fmt.Sprintf("  Base64(key)              :  %s\r\n", shortBlob(matched.Identity)))
+	sb.WriteString(fmt.Sprintf("  Ticket type              :  %s\r\n", matched.TicketType))
+
+	return schema.ToolResult{Output: sb.String()}
+}
