@@ -521,6 +521,18 @@ func (r *Rubeus) ptt(cmd schema.ParsedCommand, state *schema.SessionState) schem
 				}
 			}
 		}
+		// Also match TGS tickets by sanitized filename stem:
+		// "administrator_sqlsvr01_meridian_local_1433" -> identity=Administrator target=MSSQLSvc/SQLSVR01...
+		if matched == nil {
+			for i := range state.Tickets {
+				t := &state.Tickets[i]
+				expected := strings.ToLower(t.Identity) + "_" + sanitizeSPN(t.Target)
+				if strings.EqualFold(expected, name) {
+					matched = t
+					break
+				}
+			}
+		}
 	}
 
 	if matched == nil {
@@ -919,95 +931,94 @@ func (r *Rubeus) silver(
 
 func (r *Rubeus) s4u(
 	cmd schema.ParsedCommand,
-	_ *schema.SessionState,
+	state *schema.SessionState,
 	provider providers.Provider,
 ) schema.ToolResult {
 	user := flagValue(cmd.Flags, "user")
 	impersonate := flagValue(cmd.Flags, "impersonateuser")
 	msdsspn := flagValue(cmd.Flags, "msdsspn")
-	ticket := flagValue(cmd.Flags, "ticket")
-	ntlm := flagValue(cmd.Flags, "ntlm")
+	ntlmFlag := flagValue(cmd.Flags, "ntlm")
+	if ntlmFlag == "" {
+		ntlmFlag = flagValue(cmd.Flags, "rc4")
+	}
+	_ = ntlmFlag
 
-	if user == "" || impersonate == "" || msdsspn == "" || (ticket == "" && ntlm == "") {
+	if user == "" || impersonate == "" || msdsspn == "" {
 		return schema.ToolResult{
-			Output: "[-] /user, /impersonateuser, /msdsspn, and (/ticket or /ntlm) are required\r\n",
+			Output: "[*] Action: S4U\r\n\r\n[-] /user, /impersonateuser, /msdsspn are all required.\r\n",
 		}
 	}
 
-	domain := providers.GetDomain(provider)
-	domainUpper := strings.ToUpper(domain)
-	targetHost := spnHost(msdsspn)
-
-	delegations := provider.GetDelegations()
-	var found bool
-	for _, d := range delegations {
-		if strings.EqualFold(spnHost(d.Account), targetHost) {
-			for _, allowed := range d.AllowedTargets {
-				if strings.EqualFold(allowed, msdsspn) || strings.EqualFold(spnHost(allowed), targetHost) {
-					found = true
-					break
-				}
-			}
-		}
-		if found {
-			break
-		}
-	}
-
-	if !found {
+	deleg, ok := provider.GetDelegation(user)
+	if !ok || strings.ToLower(deleg.Type) != "constrained" {
 		return schema.ToolResult{
 			Output: fmt.Sprintf(
-				"[*] Action: S4U\r\n\r\n[-] Account '%s' does not have constrained delegation configured for '%s'\r\n[-] KDC_ERR_BADOPTION\r\n",
-				user, msdsspn,
+				"[*] Action: S4U\r\n\r\n[-] %s does not have constrained delegation configured.\r\n",
+				user,
 			),
 		}
 	}
 
+	allowed := false
+	for _, t := range deleg.AllowedTargets {
+		if strings.EqualFold(t, msdsspn) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return schema.ToolResult{
+			Output: fmt.Sprintf(
+				"[*] Action: S4U\r\n\r\n[-] %s is not in %s allowed delegation targets.\r\n",
+				msdsspn, user,
+			),
+		}
+	}
+
+	domain := providers.GetDomain(provider)
 	now := time.Now()
-	expiresAt := now.Add(10 * time.Hour)
-	renewTill := now.Add(7 * 24 * time.Hour)
-	luid := generateLUID("s4u:" + user + impersonate + msdsspn + now.Format("150405"))
-	blob := tgtBlob(impersonate, domain)
-	blob2 := tgtBlob(impersonate+msdsspn, domain)
+	endTime := now.Add(10 * time.Hour)
+	luid := pseudoLUID(user + impersonate + msdsspn)
+	b64 := pseudoB64(impersonate + msdsspn + user)
 
 	var sb strings.Builder
 	sb.WriteString("[*] Action: S4U\r\n\r\n")
-	sb.WriteString(fmt.Sprintf("[*] Building S4U2self request for: '%s@%s'\r\n", user, domainUpper))
-	sb.WriteString(fmt.Sprintf("[*] Using domain controller: %s\r\n", domain))
-	sb.WriteString("[+] S4U2self success!\r\n")
-	sb.WriteString(fmt.Sprintf("[*] Got a TGS for '%s' to '%s@%s'\r\n", impersonate, user, domainUpper))
-	sb.WriteString(fmt.Sprintf("[*] base64(ticket.kirbi) for SPN '%s':\r\n\r\n", msdsspn))
-	sb.WriteString(wrapBase64(blob, 80))
-	sb.WriteString("\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("[*] Using existing TGT for '%s'\r\n\r\n", user))
+	sb.WriteString("[*] Building S4U2self request for: '" + user + "@" + strings.ToUpper(domain) + "'\r\n")
+	sb.WriteString("[+] S4U2self success!\r\n\r\n")
 	sb.WriteString(fmt.Sprintf("[*] Impersonating user '%s' to target SPN '%s'\r\n", impersonate, msdsspn))
-	sb.WriteString(fmt.Sprintf("[*] Building S4U2proxy request for service: '%s'\r\n", msdsspn))
-	sb.WriteString("[+] S4U2proxy success!\r\n")
-	sb.WriteString(fmt.Sprintf("[*] base64(ticket.kirbi) for SPN '%s':\r\n\r\n", msdsspn))
-	sb.WriteString(wrapBase64(blob2, 80))
-	sb.WriteString("\r\n\r\n")
+	sb.WriteString("[*] Building S4U2proxy request for service: '" + msdsspn + "'\r\n")
+	sb.WriteString("[+] S4U2proxy success!\r\n\r\n")
+	sb.WriteString("[*] base64(ticket.kirbi) for SPN '" + msdsspn + "':\r\n\r\n")
+	sb.WriteString("          " + wrapB64(b64, 80) + "\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("  ServiceName              :  %s\r\n", msdsspn))
+	sb.WriteString(fmt.Sprintf("  ServiceRealm             :  %s\r\n", strings.ToUpper(domain)))
+	sb.WriteString(fmt.Sprintf("  UserName                 :  %s\r\n", strings.ToLower(impersonate)))
+	sb.WriteString(fmt.Sprintf("  UserRealm                :  %s\r\n", strings.ToUpper(domain)))
+	sb.WriteString(fmt.Sprintf("  StartTime                :  %s\r\n", now.Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  EndTime                  :  %s\r\n", endTime.Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString(fmt.Sprintf("  RenewTill                :  %s\r\n", now.Add(7*24*time.Hour).Format("1/2/2006 3:04:05 PM")))
+	sb.WriteString("  Flags                    :  name_canonicalize, pre_authent, renewable, forwardable, ok_as_delegate\r\n")
+	sb.WriteString("  KeyType                  :  aes256_cts_hmac_sha1\r\n")
+	sb.WriteString(fmt.Sprintf("  Base64(key)              :  %s\r\n", pseudoB64(user+"s4ukey")[:24]))
 	sb.WriteString("[+] Ticket successfully imported!\r\n")
+	sb.WriteString(fmt.Sprintf("[*] LUID                   :  0x%016x\r\n", luid))
+	filename := strings.ToLower(impersonate) + "_" + sanitizeSPN(msdsspn) + ".kirbi"
+	sb.WriteString(fmt.Sprintf("[*] Saving ticket to '%s'\r\n", filename))
+	sb.WriteString("[*] Ticket written to disk!\r\n")
 
-	return schema.ToolResult{
-		Output: sb.String(),
-		Effects: []schema.SideEffect{
-			{
-				Type:            schema.SideEffectTypeTicket,
-				TicketType:      "TGS",
-				Identity:        impersonate,
-				Target:          msdsspn,
-				TicketB64:       blob2,
-				TicketLUID:      luid,
-				TicketExpiresAt: expiresAt,
-				TicketRenewTill: renewTill,
-			},
+	effects := []schema.SideEffect{
+		{
+			Type:       schema.SideEffectTypeTicket,
+			TicketType: "TGS",
+			Identity:   impersonate,
+			Target:     msdsspn,
 		},
 	}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
 
-// generateLUID produces a realistic LUID string deterministically from a seed string.
-// Format: 0x00000000XXXXXXXX — upper 32 bits always 0, lower 32 bits derived from seed.
 func generateLUID(seed string) string {
 	h := fnv.New32a()
 	h.Write([]byte(seed))
@@ -1134,4 +1145,51 @@ func credLine(user, domain, password, ntlm string) string {
 		return fmt.Sprintf("rc4_hmac hash     : %s", ntlm)
 	}
 	return fmt.Sprintf("aes256_cts_hmac_sha1 hash : %s", ntlmFromPassword(password))
+}
+
+// pseudoLUID returns a stable fake LUID from a seed string.
+func pseudoLUID(seed string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("luid:" + seed))
+	return h.Sum64() & 0x00ffffffffffffff
+}
+
+// sanitizeSPN converts "MSSQLSvc/SQLSVR01.meridian.local:1433" → "sqlsvr01_1433"
+// for use in filenames.
+func sanitizeSPN(spn string) string {
+	s := strings.ToLower(spn)
+	if idx := strings.Index(s, "/"); idx >= 0 {
+		s = s[idx+1:]
+	}
+	s = strings.ReplaceAll(s, ".", "_")
+	s = strings.ReplaceAll(s, ":", "_")
+	return s
+}
+
+// wrapB64 wraps a base64 string at width chars with 10-space indent.
+func wrapB64(s string, width int) string {
+	var out strings.Builder
+	for len(s) > width {
+		out.WriteString(s[:width] + "\r\n          ")
+		s = s[width:]
+	}
+	out.WriteString(s)
+	return out.String()
+}
+
+// pseudoB64 returns a deterministic base64-looking string seeded from s.
+func pseudoB64(s string) string {
+	h := fnv.New64a()
+	h.Write([]byte("b64:" + s))
+	v1 := h.Sum64()
+	h.Write([]byte("salt"))
+	v2 := h.Sum64()
+	h.Write([]byte("salt2"))
+	v3 := h.Sum64()
+	h.Write([]byte("salt3"))
+	v4 := h.Sum64()
+	return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf(
+		"%016x%016x%016x%016x%016x%016x%016x%016x",
+		v1, v2, v3, v4, v1^v2, v2^v3, v3^v4, v4^v1,
+	)))
 }

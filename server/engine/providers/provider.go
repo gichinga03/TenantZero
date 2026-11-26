@@ -119,6 +119,9 @@ type Provider interface {
 	// GetDelegations returns all delegation configurations across all computers.
 	GetDelegations() []schema.Delegation
 
+	// GetDelegation returns the delegation config for a specific account.
+	GetDelegation(account string) (schema.Delegation, bool)
+
 	// GetUnconstrainedDelegation returns computers configured for unconstrained
 	// Kerberos delegation (Delegation.Type == "unconstrained").
 	// Domain controllers are excluded — they are unconstrained by default and
@@ -170,6 +173,10 @@ type Provider interface {
 	// Azure equivalent: would check for Global Administrator or equivalent
 	// Entra role assignment instead of DA group membership.
 	HasDomainAdmin(username string) bool
+
+	// HasSQLAdmin returns true if username has sql_admin rights on hostname,
+	// either via static host rights, S4U ticket in session state, or DA.
+	HasSQLAdmin(username, hostname string) bool
 
 	// HasReplicationRights returns true if username holds AllExtendedRights
 	// or GenericAll over the domain object in the ACL list. These rights

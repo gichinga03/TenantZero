@@ -28,14 +28,74 @@ hosts:
     reachable_from: []
     rights: []
 
+  - hostname: FILESVR01
+    ip: "10.10.20.11"
+    role: file_server
+    os: "Windows Server 2016"
+    in_scope: true
+    staged_tools:
+      - 'C:\tools\Rubeus.exe'
+      - 'C:\tools\PowerView.ps1'
+    reachable_from:
+      - WKSTN01
+    rights:
+      - principal: "MERIDIAN\\awalker"
+        rights:
+          - local_admin
+          - winrm_access
+      - principal: "IT Support"
+        rights:
+          - winrm_access
+
+  - hostname: APPSRV01
+    ip: "10.10.20.30"
+    role: application_server
+    os: "Windows Server 2019"
+    in_scope: true
+    staged_tools:
+      - 'C:\tools\Rubeus.exe'
+      - 'C:\tools\mimikatz.exe'
+    reachable_from:
+      - FILESVR01
+    rights:
+      - principal: "MERIDIAN\\svc_app"
+        rights:
+          - local_admin
+          - winrm_access
+      - principal: "MERIDIAN\\awalker"
+        rights:
+          - winrm_access
+
+  - hostname: SQLSVR01
+    ip: "10.10.20.50"
+    role: sql_server
+    os: "Windows Server 2019"
+    in_scope: true
+    staged_tools:
+      - 'C:\tools\Rubeus.exe'
+      - 'C:\tools\mimikatz.exe'
+    reachable_from:
+      - APPSRV01
+    rights:
+      - principal: "MERIDIAN\\svc_backup"
+        rights:
+          - sql_admin
+      - principal: "MERIDIAN\\Administrator"
+        rights:
+          - local_admin
+          - winrm_access
+          - sql_admin
+
   - hostname: DC01
     ip: "10.10.10.10"
     role: domain_controller
     os: "Windows Server 2019"
     in_scope: true
-    staged_tools: []
+    staged_tools:
+      - 'C:\tools\mimikatz.exe'
+      - 'C:\tools\Rubeus.exe'
     reachable_from:
-      - WKSTN01
+      - SQLSVR01
     rights:
       - principal: "MERIDIAN\\awalker"
         rights:
@@ -47,45 +107,60 @@ hosts:
           - winrm_access
           - wmi_access
 
-  - hostname: FILESVR01
-    ip: "10.10.20.11"
-    role: file_server
-    os: "Windows Server 2016"
-    in_scope: true
-    staged_tools: []
-    reachable_from:
-      - WKSTN01
-    rights:
-      - principal: "MERIDIAN\\awalker"
-        rights:
-          - local_admin
-          - winrm_access
-      - principal: "IT Support"       # group-level grant — engine resolves membership
-        rights:
-          - winrm_access
-
   - hostname: HRWKSTN01
     ip: "10.10.20.25"
     role: workstation
     os: "Windows 10 Enterprise"
-    in_scope: false                   # out-of-scope — ScopeViolation fires if targeted
+    in_scope: false
     staged_tools: []
     reachable_from: []
     rights: []
 
+# ── Computers (AD computer objects — unconstrained delegation) ────────────────
+computers:
+  - name: APPSRV01
+    dns_hostname: APPSRV01.meridian.local
+    unconstrained_delegation: true
+    operating_system: "Windows Server 2019"
+  - name: DC01
+    dns_hostname: DC01.meridian.local
+    unconstrained_delegation: true
+    operating_system: "Windows Server 2019"
+  - name: WKSTN01
+    dns_hostname: WKSTN01.meridian.local
+    unconstrained_delegation: false
+    operating_system: "Windows 10 Enterprise"
+  - name: FILESVR01
+    dns_hostname: FILESVR01.meridian.local
+    unconstrained_delegation: false
+    operating_system: "Windows Server 2016"
+  - name: SQLSVR01
+    dns_hostname: SQLSVR01.meridian.local
+    unconstrained_delegation: false
+    operating_system: "Windows Server 2019"
+
 # ── Pivot graph ───────────────────────────────────────────────────────────────
-# jump validates this before allowing lateral movement.
-# requires_right must match a right in the target host's rights block OR
-# a runtime ACL granted by a prior tool (HasRuntimeACL).
 relationships:
   - type: can_pivot_to
     from: WKSTN01
-    to: DC01
-    requires_right: local_admin      # jump psexec/wmi need this; winrm needs winrm_access
-  - type: can_pivot_to
-    from: WKSTN01
     to: FILESVR01
-    requires_right: local_admin
+    requires_right: winrm_access
+  - type: can_pivot_to
+    from: FILESVR01
+    to: APPSRV01
+    requires_right: winrm_access
+  - type: can_pivot_to
+    from: FILESVR01
+    to: SQLSVR01
+    requires_right: sql_admin
+  - type: can_pivot_to
+    from: APPSRV01
+    to: SQLSVR01
+    requires_right: sql_admin
+  - type: can_pivot_to
+    from: SQLSVR01
+    to: DC01
+    requires_right: winrm_access
 
 # ── Users ─────────────────────────────────────────────────────────────────────
 users:
@@ -116,17 +191,17 @@ users:
     unconstrained_delegation: false
     password_never_expires: true
 
-  - samaccountname: krbtgt
-    displayname: "krbtgt"
-    account: "MERIDIAN\\krbtgt"
-    password: ""
-    nt_hash: "aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0"
+  - samaccountname: svc_app
+    displayname: "App Service Account"
+    account: "MERIDIAN\\svc_app"
+    password: "AppSvc2020!"
+    nt_hash: ""
     groups:
       - Domain Users
     spns:
-      - "krbtgt/meridian.local"
-    enabled: false
-    admincount: true
+      - "HTTP/APPSRV01.meridian.local"
+    enabled: true
+    admincount: false
     unconstrained_delegation: false
     password_never_expires: true
 
@@ -139,9 +214,23 @@ users:
       - Domain Users
       - Backup Operators
     spns:
-      - "MSSQLSvc/FILESVR01.meridian.local:1433"
+      - "MSSQLSvc/SQLSVR01.meridian.local:1433"
     enabled: true
     admincount: false
+    unconstrained_delegation: false
+    password_never_expires: true
+
+  - samaccountname: krbtgt
+    displayname: "krbtgt"
+    account: "MERIDIAN\\krbtgt"
+    password: ""
+    nt_hash: ""
+    groups:
+      - Domain Users
+    spns:
+      - "krbtgt/meridian.local"
+    enabled: false
+    admincount: true
     unconstrained_delegation: false
     password_never_expires: true
 
@@ -162,7 +251,7 @@ users:
 # ── Groups ────────────────────────────────────────────────────────────────────
 groups:
   - name: Domain Users
-    members: [jsmith, awalker, krbtgt, svc_backup, Administrator]
+    members: [jsmith, awalker, svc_app, svc_backup, krbtgt, Administrator]
   - name: IT Support
     members: [awalker]
   - name: Backup Operators
@@ -170,9 +259,16 @@ groups:
   - name: Domain Admins
     members: [Administrator]
 
+# ── Delegations ───────────────────────────────────────────────────────────────
+delegations:
+  # svc_backup has constrained delegation to MSSQLSvc on SQLSVR01
+  - account: svc_backup
+    type: constrained
+    allowed_targets:
+      - "MSSQLSvc/SQLSVR01.meridian.local:1433"
+  # APPSRV01 computer account has unconstrained delegation (modeled in computers block)
+
 # ── AD ACLs ───────────────────────────────────────────────────────────────────
-# These are AD object ACLs (WriteDACL, GenericWrite etc.) —
-# distinct from host rights above which control lateral movement access.
 acls:
   - from: "MERIDIAN\\awalker"
     to: "meridian.local"
@@ -223,6 +319,15 @@ tools:
 
 # ── Win conditions ────────────────────────────────────────────────────────────
 win_conditions:
+  - id: wc-xpcmdshell
+    description: "Enable and execute xp_cmdshell on SQLSVR01 as svc_backup via S4U"
+    type: loot
+    params:
+      loot_type: command_output
+      loot_value_contains: xp_cmdshell
+    points: 50
+    required: false
+
   - id: wc-dcsync-krbtgt
     description: "Execute DCSync and extract the krbtgt NTLM hash"
     type: loot
@@ -234,7 +339,7 @@ win_conditions:
 
 # ── Timing ───────────────────────────────────────────────────────────────────
 time:
-  session_timeout_minutes: 180
+  session_timeout_minutes: 240
   token_ttl_minutes: 60
 
 # ── Hints ─────────────────────────────────────────────────────────────────────
@@ -246,7 +351,16 @@ hints:
     min_elapsed_minutes: 30
     text: "Once you have awalker's credentials, check their AD permissions. WriteDACL on the domain object is powerful."
   - id: hint-03
-    min_elapsed_minutes: 45
+    min_elapsed_minutes: 50
+    text: "APPSRV01 has unconstrained delegation enabled. Any service ticket sent to it caches the caller's TGT in memory."
+  - id: hint-04
+    min_elapsed_minutes: 70
+    text: "svc_backup has constrained delegation configured. Use Rubeus s4u to impersonate Administrator to MSSQLSvc/SQLSVR01."
+  - id: hint-05
+    min_elapsed_minutes: 90
+    text: "Once on SQLSVR01 as Administrator via S4U, enable xp_cmdshell and use it for code execution. Then pivot to DC01."
+  - id: hint-06
+    min_elapsed_minutes: 110
     text: "Add-DomainObjectAcl with -Rights DCSync grants the account replication rights. Then use mimikatz lsadump::dcsync."
 
 # ── Starting point ────────────────────────────────────────────────────────────

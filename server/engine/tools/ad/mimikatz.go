@@ -87,6 +87,8 @@ func (m *Mimikatz) Execute(
 		return m.kerberosGolden(flags, state, provider)
 	case "kerberos::ptt":
 		return m.kerberosPtt(flags)
+	case "sql::xpcmdshell":
+		return m.sqlXpCmdshell(flags, state, provider)
 	default:
 		return schema.ToolResult{Output: mimikatzBanner}
 	}
@@ -496,3 +498,75 @@ func deterministicDomainSID(domain string) string {
 	return fmt.Sprintf("S-1-5-21-%d-%d-%d", a, b, c2)
 }
 
+
+// sqlXpCmdshell simulates enabling and running xp_cmdshell on a SQL server.
+// Requires sql_admin rights on the current host (granted via S4U ticket for svc_backup,
+// or direct Administrator access).
+func (m *Mimikatz) sqlXpCmdshell(
+	flags map[string]string,
+	state *schema.SessionState,
+	provider providers.Provider,
+) schema.ToolResult {
+	cmd, hasCmd := flags["cmd"]
+
+	// Check the caller has sql_admin on this host
+	if !provider.HasSQLAdmin(state.ActiveUser, state.ActiveHost) {
+		return schema.ToolResult{
+			Output: "[-] EXEC xp_cmdshell: Msg 229, Level 14, State 5\r\n    The EXECUTE permission was denied on the object 'xp_cmdshell'.\r\n    Check SQL login rights or use a service account with delegation.\r\n",
+		}
+	}
+
+	var sb strings.Builder
+
+	// Enable xp_cmdshell if no cmd given — simulate sp_configure
+	if !hasCmd || cmd == "" {
+		sb.WriteString("1> EXEC sp_configure 'show advanced options', 1\r\n")
+		sb.WriteString("2> RECONFIGURE\r\n")
+		sb.WriteString("Configuration option 'show advanced options' changed from 0 to 1. Run the RECONFIGURE statement to install.\r\n\r\n")
+		sb.WriteString("1> EXEC sp_configure 'xp_cmdshell', 1\r\n")
+		sb.WriteString("2> RECONFIGURE\r\n")
+		sb.WriteString("Configuration option 'xp_cmdshell' changed from 0 to 1. Run the RECONFIGURE statement to install.\r\n")
+
+		effects := []schema.SideEffect{
+			{
+				Type:       schema.SideEffectTypeLoot,
+				LootType:   "command_output",
+				LootValue:  "xp_cmdshell enabled on " + state.ActiveHost,
+				LootSource: "sql." + state.ActiveHost + ".xp_cmdshell",
+			},
+		}
+		return schema.ToolResult{Output: sb.String(), Effects: effects}
+	}
+
+	// Execute command via xp_cmdshell
+	sb.WriteString(fmt.Sprintf("1> EXEC xp_cmdshell '%s'\r\n", cmd))
+	sb.WriteString("2> GO\r\n")
+	sb.WriteString("output\r\n")
+	sb.WriteString("------------------------------------------------------------------------\r\n")
+
+	// Simulate realistic output for common recon commands
+	switch {
+	case strings.Contains(cmd, "whoami"):
+		sb.WriteString("nt authority\\system\r\n")
+	case strings.Contains(cmd, "hostname"):
+		sb.WriteString(state.ActiveHost + "\r\n")
+	case strings.Contains(cmd, "ipconfig"):
+		sb.WriteString("Windows IP Configuration\r\n\r\nEthernet adapter Ethernet0:\r\n   IPv4 Address. . . : 10.10.20.50\r\n   Subnet Mask . . . : 255.255.255.0\r\n")
+	case strings.Contains(cmd, "net user") || strings.Contains(cmd, "net localgroup"):
+		sb.WriteString("The command completed successfully.\r\n")
+	default:
+		sb.WriteString("The command completed successfully.\r\n")
+	}
+
+	sb.WriteString("\r\n(1 rows affected)\r\n")
+
+	effects := []schema.SideEffect{
+		{
+			Type:       schema.SideEffectTypeLoot,
+			LootType:   "command_output",
+			LootValue:  "xp_cmdshell:" + cmd + "@" + state.ActiveHost,
+			LootSource: "sql." + state.ActiveHost + ".exec",
+		},
+	}
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
+}

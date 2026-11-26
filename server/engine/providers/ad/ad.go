@@ -380,6 +380,42 @@ func (p *ADProvider) HasLocalAdmin(username, hostname string) bool {
 	return false
 }
 
+func (p *ADProvider) HasSQLAdmin(username, hostname string) bool {
+	if p.HasDomainAdmin(username) {
+		return true
+	}
+	// Check tickets in state — S4U ticket for this SPN grants sql_admin
+	for _, t := range p.state.Tickets {
+		if strings.EqualFold(t.Identity, username) &&
+			strings.Contains(strings.ToLower(t.Target), strings.ToLower(hostname)) {
+			return true
+		}
+	}
+	// Check static host rights
+	h, ok := p.GetHost(hostname)
+	if !ok {
+		return false
+	}
+	barePrincipal := username
+	if idx := strings.LastIndexAny(username, `\/`); idx >= 0 {
+		barePrincipal = username[idx+1:]
+	}
+	for _, r := range h.Rights {
+		rBare := r.Principal
+		if idx := strings.LastIndexAny(r.Principal, `\/`); idx >= 0 {
+			rBare = r.Principal[idx+1:]
+		}
+		if strings.EqualFold(r.Principal, username) || strings.EqualFold(rBare, barePrincipal) {
+			for _, rr := range r.Rights {
+				if strings.EqualFold(rr, "sql_admin") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (p *ADProvider) HasDomainAdmin(username string) bool {
 	for _, g := range p.lab.Groups {
 		if strings.EqualFold(g.Name, "Domain Admins") {
