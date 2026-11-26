@@ -84,7 +84,7 @@ func (r *Rubeus) Execute(
 	case "dump":
 		return r.dump(cmd, state)
 	case "ptt":
-		return r.ptt(cmd)
+		return r.ptt(cmd, state)
 	case "triage":
 		return r.triage(state)
 	default:
@@ -262,26 +262,34 @@ func (r *Rubeus) asktgt(
 	sb.WriteString(fmt.Sprintf("  KeyType                  :  rc4_hmac\r\n"))
 	sb.WriteString(fmt.Sprintf("  Base64(key)              :  %s\r\n", shortBlob(user)))
 	sb.WriteString(fmt.Sprintf("  ASREP (key)              :  %s\r\n\r\n", strings.ToUpper(ntlmFromPassword(user))))
-	fmt.Fprintf(&sb, "[*] Saving ticket to '%s.kirbi'\r\n", user)
-	sb.WriteString(fmt.Sprintf("[*] Ticket written to disk!\r\n"))
-	sb.WriteString(fmt.Sprintf("[*] LUID                   :  %s\r\n", luid))
+	doPTT := hasFlag(cmd.Flags, "ptt")
 
-	return schema.ToolResult{
-		Output: sb.String(),
-		Effects: []schema.SideEffect{
-			{
-				Type:    schema.SideEffectTypeSetSessionUser,
-				NewUser: user,
-			},
-			{
-				Type:       schema.SideEffectTypeTicket,
-				TicketType: "TGT",
-				Identity:   user,
-				Target:     domainUpper,
-				TicketB64:  string(ticketJSON),
-			},
+	if doPTT {
+		sb.WriteString(fmt.Sprintf("[+] Ticket successfully imported into the current session!\r\n"))
+		sb.WriteString(fmt.Sprintf("[*] LUID                   :  %s\r\n", luid))
+	} else {
+		fmt.Fprintf(&sb, "[*] Saving ticket to '%s.kirbi'\r\n", user)
+		sb.WriteString(fmt.Sprintf("[*] Ticket written to disk!\r\n"))
+		sb.WriteString(fmt.Sprintf("[*] LUID                   :  %s\r\n", luid))
+	}
+
+	effects := []schema.SideEffect{
+		{
+			Type:       schema.SideEffectTypeTicket,
+			TicketType: "TGT",
+			Identity:   user,
+			Target:     domainUpper,
+			TicketB64:  string(ticketJSON),
 		},
 	}
+	if doPTT {
+		effects = append(effects, schema.SideEffect{
+			Type:    schema.SideEffectTypeSetSessionUser,
+			NewUser: user,
+		})
+	}
+
+	return schema.ToolResult{Output: sb.String(), Effects: effects}
 }
 
 // ── s4u ───────────────────────────────────────────────────────────────────────
@@ -413,17 +421,48 @@ func (r *Rubeus) dump(_ schema.ParsedCommand, state *schema.SessionState) schema
 
 // ── ptt ───────────────────────────────────────────────────────────────────────
 
-func (r *Rubeus) ptt(cmd schema.ParsedCommand) schema.ToolResult {
-	ticket := flagValue(cmd.Flags, "ticket")
-	if ticket == "" {
+func (r *Rubeus) ptt(cmd schema.ParsedCommand, state *schema.SessionState) schema.ToolResult {
+	ticketArg := flagValue(cmd.Flags, "ticket")
+	if ticketArg == "" {
 		return schema.ToolResult{Output: "[-] /ticket is required\r\n"}
+	}
+
+	// Strip path, strip .kirbi — match against stored ticket identity
+	name := ticketArg
+	if idx := strings.LastIndexAny(name, `/\\`); idx >= 0 {
+		name = name[idx+1:]
+	}
+	name = strings.TrimSuffix(strings.ToLower(name), ".kirbi")
+
+	var matched *schema.Ticket
+	for i := range state.Tickets {
+		if strings.EqualFold(state.Tickets[i].Identity, name) && state.Tickets[i].TicketType == "TGT" {
+			matched = &state.Tickets[i]
+			break
+		}
+	}
+
+	if matched == nil {
+		return schema.ToolResult{
+			Output: fmt.Sprintf("[-] Ticket not found: %s\r\n[*] Use Rubeus dump or triage to list available tickets\r\n", ticketArg),
+		}
 	}
 
 	var sb strings.Builder
 	sb.WriteString("[*] Action: Import Ticket\r\n\r\n")
+	sb.WriteString(fmt.Sprintf("[*] Importing ticket for %s @ %s\r\n", matched.Identity, matched.Target))
 	sb.WriteString(fmt.Sprintf("[+] Ticket successfully imported!\r\n"))
+	sb.WriteString(fmt.Sprintf("[*] LUID                   :  %s\r\n", fakeLUID()))
 
-	return schema.ToolResult{Output: sb.String()}
+	return schema.ToolResult{
+		Output: sb.String(),
+		Effects: []schema.SideEffect{
+			{
+				Type:    schema.SideEffectTypeSetSessionUser,
+				NewUser: matched.Identity,
+			},
+		},
+	}
 }
 
 // ── triage ────────────────────────────────────────────────────────────────────
