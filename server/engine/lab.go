@@ -115,9 +115,19 @@ func InitState(lab *schema.Lab, sessionID string) *schema.SessionState {
 	}
 
 	if lab.StartingPoint.Machine != "" {
-		state.ActiveUser = lab.StartingPoint.User
-		state.ActiveHost = lab.StartingPoint.Machine
-		state.CWD        = `C:\`
+		state.ActiveUser        = lab.StartingPoint.User
+		state.ActiveHost        = lab.StartingPoint.Machine
+		state.ActiveBeaconID    = "b1a2c3d4e5f67890"
+		state.CWD               = `C:\`
+		state.BeaconTree        = []schema.Beacon{
+			{
+				ID:          "b1a2c3d4e5f67890",
+				Host:        lab.StartingPoint.Machine,
+				Identity:    lab.StartingPoint.User,
+				Active:      true,
+				CheckedInAt: time.Now().UTC(),
+			},
+		}
 	} else {
 		state.CWD = `C:\`
 	}

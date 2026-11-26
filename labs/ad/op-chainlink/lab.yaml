@@ -15,88 +15,83 @@ forests:
       - "10.10.10.0/24"
       - "10.10.20.0/24"
 
-trusts: []
-
+# ── Hosts ────────────────────────────────────────────────────────────────────
 hosts:
   - hostname: WKSTN01
-    forest: meridian.local
     ip: "10.10.10.15"
     role: workstation
-    in_scope: true
     os: "Windows 10 Enterprise"
+    in_scope: true
     staged_tools:
       - 'C:\tools\Rubeus.exe'
       - 'C:\tools\PowerView.ps1'
     reachable_from: []
+    rights: []
+
   - hostname: DC01
-    forest: meridian.local
     ip: "10.10.10.10"
     role: domain_controller
-    in_scope: true
     os: "Windows Server 2019"
+    in_scope: true
     staged_tools: []
     reachable_from:
       - WKSTN01
+    rights:
+      - principal: "MERIDIAN\\awalker"
+        rights:
+          - local_admin
+          - winrm_access
+      - principal: "MERIDIAN\\Administrator"
+        rights:
+          - local_admin
+          - winrm_access
+          - wmi_access
+
   - hostname: FILESVR01
-    forest: meridian.local
     ip: "10.10.20.11"
     role: file_server
-    in_scope: true
     os: "Windows Server 2016"
+    in_scope: true
     staged_tools: []
     reachable_from:
       - WKSTN01
+    rights:
+      - principal: "MERIDIAN\\awalker"
+        rights:
+          - local_admin
+          - winrm_access
+      - principal: "IT Support"       # group-level grant — engine resolves membership
+        rights:
+          - winrm_access
+
   - hostname: HRWKSTN01
-    forest: meridian.local
     ip: "10.10.20.25"
     role: workstation
-    in_scope: false
     os: "Windows 10 Enterprise"
+    in_scope: false                   # out-of-scope — ScopeViolation fires if targeted
     staged_tools: []
     reachable_from: []
+    rights: []
 
-identities:
-  - account: "MERIDIAN\\jsmith"
-    forest: meridian.local
-    groups:
-      - Domain Users
-    spns: []
-    password: "Welcome1!"
-    nt_hash: ""
-  - account: "MERIDIAN\\awalker"
-    forest: meridian.local
-    groups:
-      - Domain Users
-      - IT Support
-    spns: []
-    password: "Autumn2024!"
-    nt_hash: ""
-  - account: "MERIDIAN\\krbtgt"
-    forest: meridian.local
-    groups:
-      - Domain Users
-    spns:
-      - "krbtgt/meridian.local"
-    password: ""
-    nt_hash: "aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0"
-
+# ── Pivot graph ───────────────────────────────────────────────────────────────
+# jump validates this before allowing lateral movement.
+# requires_right must match a right in the target host's rights block OR
+# a runtime ACL granted by a prior tool (HasRuntimeACL).
 relationships:
   - type: can_pivot_to
     from: WKSTN01
     to: DC01
-    requires_account: ""
-    target_account: ""
-    trust_ref: ""
+    requires_right: local_admin      # jump psexec/wmi need this; winrm needs winrm_access
   - type: can_pivot_to
     from: WKSTN01
     to: FILESVR01
-    requires_account: ""
-    target_account: ""
-    trust_ref: ""
+    requires_right: local_admin
 
+# ── Users ─────────────────────────────────────────────────────────────────────
 users:
   - samaccountname: jsmith
     displayname: "John Smith"
+    account: "MERIDIAN\\jsmith"
     password: "Welcome1!"
     nt_hash: ""
     groups:
@@ -106,8 +101,10 @@ users:
     admincount: false
     unconstrained_delegation: false
     password_never_expires: false
+
   - samaccountname: awalker
     displayname: "Alice Walker"
+    account: "MERIDIAN\\awalker"
     password: "Autumn2024!"
     nt_hash: ""
     groups:
@@ -118,8 +115,10 @@ users:
     admincount: false
     unconstrained_delegation: false
     password_never_expires: true
+
   - samaccountname: krbtgt
     displayname: "krbtgt"
+    account: "MERIDIAN\\krbtgt"
     password: ""
     nt_hash: "aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0"
     groups:
@@ -130,8 +129,10 @@ users:
     admincount: true
     unconstrained_delegation: false
     password_never_expires: true
+
   - samaccountname: svc_backup
     displayname: "Backup Service"
+    account: "MERIDIAN\\svc_backup"
     password: "BackupSvc2019!"
     nt_hash: ""
     groups:
@@ -144,51 +145,43 @@ users:
     unconstrained_delegation: false
     password_never_expires: true
 
+  - samaccountname: Administrator
+    displayname: "Administrator"
+    account: "MERIDIAN\\Administrator"
+    password: ""
+    nt_hash: ""
+    groups:
+      - Domain Users
+      - Domain Admins
+    spns: []
+    enabled: true
+    admincount: true
+    unconstrained_delegation: false
+    password_never_expires: true
+
+# ── Groups ────────────────────────────────────────────────────────────────────
 groups:
-  - name: "Domain Users"
-    members:
-      - jsmith
-      - awalker
-      - krbtgt
-      - svc_backup
-  - name: "IT Support"
-    members:
-      - awalker
-  - name: "Backup Operators"
-    members:
-      - svc_backup
-  - name: "Domain Admins"
-    members:
-      - Administrator
+  - name: Domain Users
+    members: [jsmith, awalker, krbtgt, svc_backup, Administrator]
+  - name: IT Support
+    members: [awalker]
+  - name: Backup Operators
+    members: [svc_backup]
+  - name: Domain Admins
+    members: [Administrator]
 
-computers:
-  - name: WKSTN01
-    dns_hostname: WKSTN01.meridian.local
-    unconstrained_delegation: false
-    operating_system: "Windows 10 Enterprise"
-  - name: DC01
-    dns_hostname: DC01.meridian.local
-    unconstrained_delegation: false
-    operating_system: "Windows Server 2019"
-  - name: FILESVR01
-    dns_hostname: FILESVR01.meridian.local
-    unconstrained_delegation: false
-    operating_system: "Windows Server 2016"
-
+# ── AD ACLs ───────────────────────────────────────────────────────────────────
+# These are AD object ACLs (WriteDACL, GenericWrite etc.) —
+# distinct from host rights above which control lateral movement access.
 acls:
-  - from: awalker
-    to: meridian.local
+  - from: "MERIDIAN\\awalker"
+    to: "meridian.local"
     rights: WriteDACL
-  - from: IT Support
+  - from: "IT Support"
     to: FILESVR01
     rights: GenericWrite
 
-trusts_list: []
-
-cert_templates: []
-
-delegations: []
-
+# ── Filesystem ────────────────────────────────────────────────────────────────
 filesystem:
   'C:\':
     - tools
@@ -199,28 +192,26 @@ filesystem:
     - PowerView.ps1
   'C:\Users':
     - jsmith
-  'C:\Users\jsmith':
-    - Desktop
-    - Documents
   'C:\Users\jsmith\Desktop':
     - itwiki.txt
 
 file_contents:
   'C:\Users\jsmith\Desktop\itwiki.txt':
+    da_only: false
     data: |
       IT Wiki — Internal Use Only
       ===========================
 
       Server Access Credentials (IT Support rotation — update quarterly)
       -------------------------------------------------------------------
-      Host        : FILESVR01.meridian.local
-      Account     : MERIDIAN\awalker
-      Password    : Autumn2024!
-      Purpose     : File share administration, backup verification
+      Host     : FILESVR01.meridian.local
+      Account  : MERIDIAN\awalker
+      Password : Autumn2024!
+      Purpose  : File share administration, backup verification
 
       Note: rotate before Q1 2025 audit window.
-    da_only: false
 
+# ── Tools ─────────────────────────────────────────────────────────────────────
 tools:
   available:
     - rubeus
@@ -229,8 +220,8 @@ tools:
     - crackmapexec
     - impacket
     - sharphound
-  overrides: {}
 
+# ── Win conditions ────────────────────────────────────────────────────────────
 win_conditions:
   - id: wc-dcsync-krbtgt
     description: "Execute DCSync and extract the krbtgt NTLM hash"
@@ -241,10 +232,12 @@ win_conditions:
     points: 100
     required: true
 
+# ── Timing ───────────────────────────────────────────────────────────────────
 time:
   session_timeout_minutes: 180
   token_ttl_minutes: 60
 
+# ── Hints ─────────────────────────────────────────────────────────────────────
 hints:
   - id: hint-01
     min_elapsed_minutes: 15
@@ -256,12 +249,8 @@ hints:
     min_elapsed_minutes: 45
     text: "Add-DomainObjectAcl with -Rights DCSync grants the account replication rights. Then use mimikatz lsadump::dcsync."
 
+# ── Starting point ────────────────────────────────────────────────────────────
 starting_point:
   machine: WKSTN01
   user: "MERIDIAN\\jsmith"
   privilege: standard_user
-
-mail:
-  victim_email: ""
-  victim_response_delay: 0
-  link_phish: false

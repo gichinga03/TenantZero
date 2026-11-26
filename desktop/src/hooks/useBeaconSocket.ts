@@ -10,6 +10,7 @@ export interface ParsedPayload {
 export interface WSMessage {
   _seq: number          // monotonic counter — forces new object reference every time
   type: 'output' | 'error' | 'event'
+  event_type?: string
   payload: ParsedPayload
 }
 
@@ -17,6 +18,7 @@ interface UseBeaconSocketReturn {
   connected: boolean
   lastMessage: WSMessage | null
   wsSend: (cmd: string, beaconId: string) => void
+  wsSwitchBeacon: (beaconId: string) => void
 }
 
 export function useBeaconSocket(token: string | null, labId: string): UseBeaconSocketReturn {
@@ -59,7 +61,7 @@ export function useBeaconSocket(token: string | null, labId: string): UseBeaconS
       }
 
       ws.onmessage = (ev: MessageEvent) => {
-        let raw: { type: string; payload?: unknown; event_type?: string } | null = null
+        let raw: { type: string; payload?: unknown; event_type?: string; [key: string]: unknown } | null = null
         try { raw = JSON.parse(ev.data as string) } catch { return }
 
         if (!raw) return
@@ -71,8 +73,10 @@ export function useBeaconSocket(token: string | null, labId: string): UseBeaconS
           const text = typeof raw.payload === 'string' ? raw.payload : JSON.stringify(raw.payload)
           setLastMessage({ _seq: seq, type: 'output', payload: { output: text, isError: false } })
         } else if (raw.type === 'event') {
-          const p = (raw.payload ?? {}) as ParsedPayload
-          setLastMessage({ _seq: seq, type: 'event', payload: p })
+          // payload may be a string (beacon JSON) or an object
+          const payloadStr = typeof raw.payload === 'string' ? raw.payload : JSON.stringify(raw.payload)
+          const merged: ParsedPayload = { event_type: raw.event_type, output: payloadStr }
+          setLastMessage({ _seq: seq, type: 'event', event_type: raw.event_type, payload: merged })
         } else if (raw.type === 'error') {
           const msg = typeof raw.payload === 'string' ? raw.payload : (raw.payload as ParsedPayload)?.message ?? 'unknown'
           setLastMessage({ _seq: seq, type: 'error', payload: { message: msg } })
@@ -103,5 +107,11 @@ export function useBeaconSocket(token: string | null, labId: string): UseBeaconS
     ws.send(JSON.stringify({ type: 'command', payload: cmd, beacon_id: beaconId }))
   }, [])
 
-  return { connected, lastMessage, wsSend }
+  const wsSwitchBeacon = useCallback((beaconId: string) => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({ type: 'switch_beacon', payload: beaconId }))
+  }, [])
+
+  return { connected, lastMessage, wsSend, wsSwitchBeacon }
 }

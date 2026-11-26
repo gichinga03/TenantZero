@@ -42,7 +42,7 @@ interface CtxMenu { x: number; y: number; beacon: Beacon }
 
 const SEED_BEACONS: Beacon[] = [
   {
-    id:           'b1a2c3d4-e5f6-7890-abcd-ef1234567890',
+    id:           'b1a2c3d4e5f67890',
     hostname:     'WKSTN-JSMITH',
     username:     'MERIDIAN\\jsmith',
     internalIp:   '10.10.10.21',
@@ -193,7 +193,7 @@ interface OperationsProps {
 }
 
 export default function Operations({ token }: OperationsProps) {
-  const { connected, lastMessage, wsSend } = useBeaconSocket(token || null, 'op-chainlink')
+  const { connected, lastMessage, wsSend, wsSwitchBeacon } = useBeaconSocket(token || null, 'op-chainlink')
 
   const [beacons,       setBeacons]       = useState<Beacon[]>(SEED_BEACONS)
   const [activeBeacon,  setActiveBeacon]  = useState<Beacon | null>(null)
@@ -237,6 +237,66 @@ export default function Operations({ token }: OperationsProps) {
       setSending(false)
       setTimeout(() => inputRef.current?.focus(), 0)
     }
+    if (lastMessage.type === 'event') {
+      const eventType = lastMessage.payload?.event_type ?? (lastMessage.payload as Record<string, unknown>)?.['event_type']
+      const raw = lastMessage.payload as Record<string, unknown>
+      console.log('[TZ event]', JSON.stringify(lastMessage))
+      if (raw['event_type'] === 'session_init' || eventType === 'session_init') {
+        try {
+          const rawBeacons = JSON.parse(raw['output'] as string ?? '[]') as Array<Record<string, string>>
+          setBeacons(rawBeacons.map(b => ({
+            id:           b['id']          ?? '',
+            hostname:     b['host']        ?? '',
+            username:     b['identity']    ?? '',
+            internalIp:   '—',
+            os:           'Windows Server',
+            architecture: 'x64',
+            sleep:        60,
+            jitter:       20,
+            lastSeen:     b['checkedInAt'] ?? new Date().toISOString(),
+            status:       'active' as const,
+            pid:          1000 + Math.floor(Math.random() * 60000),
+            integrity:    'Medium',
+          })))
+        } catch (e) {
+          console.error('[session_init] parse error', e)
+        }
+      }
+      if (raw['event_type'] === 'beacon_spawned' || eventType === 'beacon_spawned') {
+        try {
+          // payload.output contains the beacon JSON from the server
+          const beaconData = JSON.parse(raw['output'] as string ?? '{}') as {
+            id: string; host: string; identity: string; checkedInAt: string
+          }
+          const pid = 1000 + Math.floor(Math.random() * 60000)
+          const newBeacon: Beacon = {
+            id:           beaconData.id,
+            hostname:     beaconData.host,
+            username:     beaconData.identity,
+            internalIp:   '—',           // server doesn't send IP; filled below if parseable
+            os:           'Windows Server',
+            architecture: 'x64',
+            sleep:        60,
+            jitter:       20,
+            lastSeen:     beaconData.checkedInAt ?? new Date().toISOString(),
+            status:       'active',
+            pid,
+            integrity:    'Medium',
+          }
+          setBeacons(prev => {
+            if (prev.some(b => b.id === newBeacon.id)) return prev
+            return [...prev, newBeacon]
+          })
+          setLines(prev => [
+            ...prev,
+            { type: 'info', text: `[+] New beacon checked in — ${newBeacon.hostname} (${newBeacon.username})  pid:${pid}` },
+            { type: 'info', text: '' },
+          ])
+        } catch {
+          // malformed payload — ignore
+        }
+      }
+    }
   }, [lastMessage])
 
   // live ticker
@@ -269,6 +329,7 @@ export default function Operations({ token }: OperationsProps) {
 
   function selectBeacon(b: Beacon) {
     setActiveBeacon(b)
+    wsSwitchBeacon(b.id)
     setLines([
       { type: 'info', text: `[*] ─────────────────────────────────────────────────────` },
       { type: 'info', text: `[*] Session   ${b.id.slice(0, 13)}…` },

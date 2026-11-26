@@ -97,6 +97,10 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Send initial beacon state so frontend can replace SEED_BEACONS
+	initPayload, _ := json.Marshal(sess.State.BeaconTree)
+	writeMsg(conn, serverMsg{Type: "event", EventType: "session_init", Payload: string(initPayload)})
+
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -104,7 +108,29 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var msg clientMsg
-		if err := json.Unmarshal(raw, &msg); err != nil || msg.Type != "command" {
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			continue
+		}
+
+		// Handle beacon context switch.
+		if msg.Type == "switch_beacon" {
+			beaconID := msg.Payload
+			if beaconID == "" {
+				continue
+			}
+			for _, b := range sess.State.BeaconTree {
+				if b.ID == beaconID {
+					sess.State.ActiveBeaconID = b.ID
+					sess.State.ActiveHost = b.Host
+					sess.State.ActiveUser = b.Identity
+					writeMsg(conn, serverMsg{Type: "response", Payload: ""})
+					break
+				}
+			}
+			continue
+		}
+
+		if msg.Type != "command" {
 			continue
 		}
 
@@ -154,6 +180,27 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 		// Send response.
 		writeMsg(conn, serverMsg{Type: "response", Payload: result.Output})
+
+		// Emit beacon_spawned event for any SpawnBeacon side effects.
+		for _, eff := range result.Effects {
+			if eff.Type == schema.SideEffectTypeSpawnBeacon {
+				// Find the newly added beacon — match on host only since identity may differ in casing.
+				log.Printf("ws: looking for beacon host=%q identity=%q tree=%d", eff.BeaconHost, eff.BeaconIdentity, len(sess.State.BeaconTree))
+				for _, b := range sess.State.BeaconTree {
+					log.Printf("ws: tree beacon host=%q identity=%q active=%v", b.Host, b.Identity, b.Active)
+					if strings.EqualFold(b.Host, eff.BeaconHost) && b.Active {
+						beaconJSON, _ := json.Marshal(b)
+						log.Printf("ws: sending beacon_spawned: %s", string(beaconJSON))
+						writeMsg(conn, serverMsg{
+							Type:      "event",
+							EventType: "beacon_spawned",
+							Payload:   string(beaconJSON),
+						})
+						break
+					}
+				}
+			}
+		}
 
 		// Send push events.
 		for _, ev := range pushEvents {
@@ -302,4 +349,20 @@ const ContextKeyUserID contextKey = "userID"
 // withUserID returns a context with the userID stored under ContextKeyUserID.
 func withUserID(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, ContextKeyUserID, userID)
+}
+// keepAlive sends a ping every 30s to prevent idle connection drops.
+func keepAlive(conn *websocket.Conn, done <-chan struct{}) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		case <-done:
+			return
+		}
+	}
 }

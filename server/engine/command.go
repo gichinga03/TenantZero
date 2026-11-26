@@ -314,7 +314,7 @@ var builtins = map[string]bool{
 	builtinPwd: true, builtinCat: true, builtinType: true,
 	builtinCls: true, builtinClear: true, builtinExit: true,
 	builtinHelp: true, builtinHint: true,
-	"whoami": true, "hostname": true, "ipconfig": true, "net": true,
+	"whoami": true, "hostname": true, "ipconfig": true, "net": true, "jump": true,
 }
 
 // Dispatch routes a parsed command to either a shell builtin or the tool
@@ -332,20 +332,31 @@ func (s *Session) Dispatch(cmd schema.ParsedCommand) schema.ToolResult {
 			return schema.ToolResult{Output: fmt.Sprintf("[-] '%s' is not a recognized internal command.\r\n[*] Use 'execute-assembly C:\\tools\\%s <args>' to run .NET assemblies.", toks[0], toks[0])}
 		}
 		// Validate execute-assembly path against staged_tools for current host.
+		// Compare by filename only so "C:\\tools\\Rubeus.exe" matches "rubeus.exe".
 		if strings.HasPrefix(rawLower, "execute-assembly ") && len(toks) > 1 {
 			assemblyPath := toks[1]
+			asmFile := assemblyPath
+			if idx := strings.LastIndexAny(asmFile, `/\\`); idx >= 0 {
+				asmFile = asmFile[idx+1:]
+			}
 			stagedOK := false
+			var stagedList []string
 			for _, host := range s.Lab.Hosts {
 				if strings.EqualFold(host.Hostname, s.State.ActiveHost) {
+					stagedList = host.StagedTools
 					for _, staged := range host.StagedTools {
-						if strings.EqualFold(strings.ToLower(staged), assemblyPath) {
+						stagedFile := staged
+						if idx := strings.LastIndexAny(stagedFile, `/\\`); idx >= 0 {
+							stagedFile = stagedFile[idx+1:]
+						}
+						if strings.EqualFold(stagedFile, asmFile) {
 							stagedOK = true
 						}
 					}
 				}
 			}
 			if !stagedOK {
-				return schema.ToolResult{Output: fmt.Sprintf("[-] Assembly not found: %s\r\n[*] Staged tools on %s: C:\\tools\\Rubeus.exe, C:\\tools\\mimikatz.exe", toks[1], s.State.ActiveHost)}
+				return schema.ToolResult{Output: fmt.Sprintf("[-] Assembly not found: %s\r\n[*] Staged tools on %s: %s", toks[1], s.State.ActiveHost, strings.Join(stagedList, ", "))}
 			}
 		}
 	}
@@ -450,6 +461,24 @@ func (s *Session) dispatchBuiltin(cmd schema.ParsedCommand) schema.ToolResult {
 			"Windows IP Configuration\r\n\r\nEthernet adapter Ethernet0:\r\n\r\n   IPv4 Address. . . . . . . . . . . : %s\r\n   Subnet Mask . . . . . . . . . . . : 255.255.255.0\r\n   Default Gateway . . . . . . . . . : %s.1\r\n",
 			ip, ip[:strings.LastIndex(ip, ".")],
 		)}
+	
+	case "jump-debug":
+		return schema.ToolResult{Output: s.DebugJump(cmd.Subcommand, cmd.Args[0])}
+
+	case "jump":
+		// Subcommand is the method (psexec/winrm/wmi); Args are host + listener.
+		jumpArgs := append([]string{cmd.Subcommand}, cmd.Args...)
+		if cmd.Subcommand == "" || len(cmd.Args) < 1 {
+			return schema.ToolResult{Output: "usage: jump <psexec|winrm|wmi> <host> [listener]"}
+		}
+		out, effects, err := s.handleJump(jumpArgs)
+		if err != nil {
+			return schema.ToolResult{Output: "[!] " + err.Error()}
+		}
+		s.ApplySideEffects(effects)
+		s.AppendJournal(cmd.Raw, out)
+		return schema.ToolResult{Output: out, Effects: effects}
+	
 
 	case "net":
 		return schema.ToolResult{Output: "The syntax of this command is:\r\nNET [ ACCOUNTS | COMPUTER | CONFIG | CONTINUE | FILE | GROUP | HELP |\r\n      HELPMSG | LOCALGROUP | PAUSE | SESSION | SHARE | START |\r\n      STATISTICS | STOP | TIME | USE | USER | VIEW ]"}

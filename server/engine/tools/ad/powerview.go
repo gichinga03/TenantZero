@@ -513,21 +513,27 @@ func (pv *PowerView) addDomainObjectAcl(
 	}
 
 	// Check caller has WriteDACL over target.
+	// Effective caller is ActiveUser, but also check impersonated tokens/tickets.
 	// Normalise "DC=meridian,DC=local" → "meridian.local" for ACL table lookup.
-	caller := state.ActiveUser
+	callers := effectiveCallers(state)
 	aclTarget := normDN(target)
 	var hasWriteDACL bool
-	for _, a := range p.GetACLs() {
-		if strings.EqualFold(a.From, caller) && (strings.EqualFold(a.To, aclTarget) || strings.EqualFold(a.To, target)) {
-			if a.Rights == "WriteDACL" || a.Rights == "GenericAll" || a.Rights == "WriteOwner" {
-				hasWriteDACL = true
-				break
+	for _, caller := range callers {
+		for _, a := range p.GetACLs() {
+			if strings.EqualFold(a.From, caller) && (strings.EqualFold(a.To, aclTarget) || strings.EqualFold(a.To, target)) {
+				if a.Rights == "WriteDACL" || a.Rights == "GenericAll" || a.Rights == "WriteOwner" {
+					hasWriteDACL = true
+					break
+				}
 			}
+		}
+		if hasWriteDACL {
+			break
 		}
 	}
 	if !hasWriteDACL {
 		return noResult("Add-DomainObjectAcl", fmt.Sprintf(
-			"[-] Access denied: %s does not have WriteDACL over %s", caller, target,
+			"[-] Access denied: %s does not have WriteDACL over %s", state.ActiveUser, target,
 		))
 	}
 

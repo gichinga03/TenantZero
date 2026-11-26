@@ -25,6 +25,8 @@ type Config struct {
 	LabsDir string
 }
 
+
+
 // Load reads configuration from environment variables and validates required fields.
 // Returns an error if any required variable is absent.
 func Load() (*Config, error) {

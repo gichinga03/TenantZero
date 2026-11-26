@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/0x4D67/tenantzero/server/engine/providers"
@@ -38,9 +39,17 @@ func NewSession(lab schema.Lab, userID string) *Session {
 			UserID:              userID,
 			ActiveHost:          lab.StartingPoint.Machine,
 			ActiveUser:          lab.StartingPoint.User,
-			ActiveBeaconID:      "",
+			ActiveBeaconID:      "b1a2c3d4e5f67890",
 			CWD:                 `C:\Users\` + lab.StartingPoint.User,
-			BeaconTree:          []schema.Beacon{},
+			BeaconTree:          []schema.Beacon{
+				{
+					ID:          "b1a2c3d4e5f67890",
+					Host:        lab.StartingPoint.Machine,
+					Identity:    lab.StartingPoint.User,
+					Active:      true,
+					CheckedInAt: now,
+				},
+			},
 			GrantedACLs:         map[string][]string{},
 			Loot:                []schema.Loot{},
 			Tickets:             []schema.Ticket{},
@@ -202,4 +211,55 @@ func (s *Session) AppendJournal(raw, output string) {
 		Output:    output,
 	})
 	s.State.LastActivityAt = time.Now()
+}
+// effectiveCallers returns all identities this session can act as —
+// the active user plus any tokens and ticket identities acquired.
+// Both "DOMAIN\user" and bare "user" forms are included.
+func (s *Session) effectiveCallers() []string {
+	seen := map[string]bool{}
+	var out []string
+
+	add := func(id string) {
+		if id == "" {
+			return
+		}
+		key := strings.ToLower(id)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, id)
+		// also add bare username so "MERIDIAN\awalker" matches "awalker"
+		if idx := strings.LastIndexAny(id, `\/`); idx >= 0 {
+			bare := id[idx+1:]
+			bkey := strings.ToLower(bare)
+			if !seen[bkey] {
+				seen[bkey] = true
+				out = append(out, bare)
+			}
+		}
+	}
+
+	add(s.State.ActiveUser)
+
+	for _, t := range s.State.Tokens {
+		if t.Domain != "" {
+			add(t.Domain + `\` + t.Username)
+		} else {
+			add(t.Username)
+		}
+	}
+
+	for _, tk := range s.State.Tickets {
+		add(tk.Identity)
+		if !strings.ContainsAny(tk.Identity, `\/`) && tk.Target != "" {
+			domain := tk.Target
+			if idx := strings.Index(domain, "."); idx >= 0 {
+				domain = domain[:idx]
+			}
+			add(domain + `\` + tk.Identity)
+		}
+	}
+
+	return out
 }

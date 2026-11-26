@@ -48,15 +48,23 @@ type Trust struct {
 	FilteringEnabled bool   `yaml:"filtering_enabled" json:"filteringEnabled"`
 }
 
+// HostRight is a static ACL declared in the lab YAML granting a principal
+// specific access rights on a host — used by jump validation.
+type HostRight struct {
+	Principal string   `yaml:"principal" json:"principal"` // "DOMAIN\user" or group name
+	Rights    []string `yaml:"rights" json:"rights"`       // "local_admin", "winrm_access", "wmi_access"
+}
+
 type Host struct {
-	Hostname      string   `yaml:"hostname" json:"hostname"`
-	Forest        string   `yaml:"forest" json:"forest"`
-	IP            string   `yaml:"ip" json:"ip"`
-	Role          string   `yaml:"role" json:"role"`
-	InScope       bool     `yaml:"in_scope" json:"inScope"`
-	StagedTools   []string `yaml:"staged_tools" json:"stagedTools"`
-	ReachableFrom []string `yaml:"reachable_from" json:"reachableFrom"`
-	OS            string   `yaml:"os" json:"os"`
+	Hostname      string      `yaml:"hostname" json:"hostname"`
+	Forest        string      `yaml:"forest" json:"forest"`
+	IP            string      `yaml:"ip" json:"ip"`
+	Role          string      `yaml:"role" json:"role"`
+	InScope       bool        `yaml:"in_scope" json:"inScope"`
+	OS            string      `yaml:"os" json:"os"`
+	StagedTools   []string    `yaml:"staged_tools" json:"stagedTools"`
+	ReachableFrom []string    `yaml:"reachable_from" json:"reachableFrom"`
+	Rights        []HostRight `yaml:"rights" json:"rights"`
 }
 
 type Identity struct {
@@ -68,18 +76,18 @@ type Identity struct {
 	NTHash   string   `yaml:"nt_hash" json:"ntHash"`
 }
 
+// Relationship is a directed edge in the lab pivot graph.
 type Relationship struct {
-	Type            string `yaml:"type" json:"type"`
-	From            string `yaml:"from" json:"from"`
-	To              string `yaml:"to" json:"to"`
-	RequiresAccount string `yaml:"requires_account" json:"requiresAccount"`
-	TargetAccount   string `yaml:"target_account" json:"targetAccount"`
-	TrustRef        string `yaml:"trust_ref" json:"trustRef"`
+	Type          string `yaml:"type" json:"type"`                     // "can_pivot_to"
+	From          string `yaml:"from" json:"from"`
+	To            string `yaml:"to" json:"to"`
+	RequiresRight string `yaml:"requires_right" json:"requiresRight"`  // informational; jump.go maps method→right internally
 }
 
 type User struct {
 	SAMAccountName          string   `yaml:"samaccountname" json:"samAccountName"`
 	DisplayName             string   `yaml:"displayname" json:"displayName"`
+	Account                 string   `yaml:"account" json:"account"` // "DOMAIN\user" — matches ActiveUser
 	Password                string   `yaml:"password" json:"password"`
 	NTHash                  string   `yaml:"nt_hash" json:"ntHash"`
 	Groups                  []string `yaml:"groups" json:"groups"`
