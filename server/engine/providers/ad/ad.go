@@ -450,3 +450,34 @@ func (p *ADProvider) GetACLs() []schema.ACL {
 func (p *ADProvider) GetDelegations() []schema.Delegation {
 	return p.lab.Delegations
 }
+
+// ValidateCrossForestCredentials checks credentials for a foreign-forest account.
+// Matches against Users with a matching forest field, or Identities.
+func (p *ADProvider) ValidateCrossForestCredentials(username, password, ntlm, targetDomain string) bool {
+	for _, u := range p.lab.Users {
+		if !strings.EqualFold(u.SAMAccountName, username) {
+			continue
+		}
+		if u.Forest != "" && !strings.EqualFold(u.Forest, targetDomain) {
+			continue
+		}
+		if ntlm != "" && strings.EqualFold(u.NTHash, ntlm) {
+			return true
+		}
+		if password != "" && u.Password == password {
+			return true
+		}
+	}
+	for _, id := range p.lab.Identities {
+		if !strings.EqualFold(id.Account, username) {
+			continue
+		}
+		if id.Forest != "" && !strings.EqualFold(id.Forest, targetDomain) {
+			continue
+		}
+		if password != "" && id.Password == password {
+			return true
+		}
+	}
+	return false
+}

@@ -14,6 +14,21 @@ forests:
     subnets:
       - "10.10.10.0/24"
       - "10.10.20.0/24"
+  - forest_name: alpine.corp
+    domains:
+      - alpine.corp
+    subnets:
+      - "10.10.30.0/24"
+
+
+# ── Trusts ────────────────────────────────────────────────────────────────────
+trusts:
+  - source_forest: meridian.local
+    target_forest: alpine.corp
+    direction: outbound
+    trust_type: forest
+    sid_filtering: true
+    filtering_enabled: true
 
 # ── Hosts ────────────────────────────────────────────────────────────────────
 hosts:
@@ -107,6 +122,45 @@ hosts:
           - winrm_access
           - wmi_access
 
+
+  - hostname: ALPHADC01
+    ip: "10.10.30.1"
+    role: domain_controller
+    os: "Windows Server 2019"
+    forest: alpine.corp
+    in_scope: true
+    staged_tools:
+      - 'C:\tools\mimikatz.exe'
+      - 'C:\tools\Rubeus.exe'
+    reachable_from:
+      - DEVWKSTN01
+    rights:
+      - principal: 'ALPINE\\svc_link'
+        rights:
+          - local_admin
+          - winrm_access
+      - principal: 'ALPINE\\Administrator'
+        rights:
+          - local_admin
+          - winrm_access
+
+  - hostname: DEVWKSTN01
+    ip: "10.10.30.10"
+    role: workstation
+    os: "Windows 10 Enterprise"
+    forest: alpine.corp
+    in_scope: true
+    staged_tools:
+      - 'C:\tools\Rubeus.exe'
+      - 'C:\tools\mimikatz.exe'
+    reachable_from:
+      - DC01
+    rights:
+      - principal: 'ALPINE\\svc_link'
+        rights:
+          - local_admin
+          - winrm_access
+
   - hostname: HRWKSTN01
     ip: "10.10.20.25"
     role: workstation
@@ -161,6 +215,15 @@ relationships:
     from: SQLSVR01
     to: DC01
     requires_right: winrm_access
+  - type: can_pivot_to
+    from: DC01
+    to: DEVWKSTN01
+    requires_right: inter_realm_ticket
+  - type: can_pivot_to
+    from: DEVWKSTN01
+    to: ALPHADC01
+    requires_right: winrm_access
+
 
 # ── Users ─────────────────────────────────────────────────────────────────────
 users:
@@ -248,6 +311,38 @@ users:
     unconstrained_delegation: false
     password_never_expires: true
 
+
+  # ── Alpine forest users ──────────────────────────────────────────────────────
+  - samaccountname: svc_link
+    displayname: "Link Service Account"
+    account: 'ALPINE\\svc_link'
+    password: "LinkSvc2022!"
+    nt_hash: ""
+    groups:
+      - Domain Users
+    spns:
+      - "HTTP/DEVWKSTN01.alpine.corp"
+    enabled: true
+    admincount: false
+    unconstrained_delegation: false
+    password_never_expires: true
+    forest: alpine.corp
+
+  - samaccountname: alpine_krbtgt
+    displayname: "alpine krbtgt"
+    account: 'ALPINE\\krbtgt'
+    password: ""
+    nt_hash: ""
+    groups:
+      - Domain Users
+    spns:
+      - "krbtgt/alpine.corp"
+    enabled: false
+    admincount: true
+    unconstrained_delegation: false
+    password_never_expires: true
+    forest: alpine.corp
+
 # ── Groups ────────────────────────────────────────────────────────────────────
 groups:
   - name: Domain Users
@@ -258,6 +353,10 @@ groups:
     members: [svc_backup]
   - name: Domain Admins
     members: [Administrator]
+
+  - from: 'ALPINE\\svc_link'
+    to: "alpine.corp"
+    rights: WriteDACL
 
 # ── Delegations ───────────────────────────────────────────────────────────────
 delegations:
@@ -326,6 +425,16 @@ win_conditions:
       loot_type: command_output
       loot_value_contains: xp_cmdshell
     points: 50
+    required: false
+
+
+  - id: wc-dcsync-alpine-krbtgt
+    description: "DCSync alpine.corp and extract the alpine krbtgt NTLM hash"
+    type: loot
+    params:
+      loot_type: hash
+      loot_value_contains: alpine_krbtgt
+    points: 150
     required: false
 
   - id: wc-dcsync-krbtgt

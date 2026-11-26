@@ -156,6 +156,10 @@ type Provider interface {
 	// rather than a password, since Entra auth is token-based.
 	ValidateCredentials(username, password string) bool
 
+	// ValidateCrossForestCredentials validates credentials for a user in a foreign forest.
+	// Checks Identities with matching forest/domain, then Users with forest field set.
+	ValidateCrossForestCredentials(username, password, ntlm, targetDomain string) bool
+
 	// ValidateNTLM returns true if username:NTHash is a valid pair.
 	// Checks SessionState.Loot.NTLMHashes. Used by pass-the-hash paths in
 	// CME, Impacket, and Mimikatz tools.

@@ -1,0 +1,293 @@
+[1mdiff --git a/README.md b/README.md[m
+[1mindex 6c887db..0c68cf4 100644[m
+[1m--- a/README.md[m
+[1m+++ b/README.md[m
+[36m@@ -18,4 +18,7 @@[m [mjump winrm DC01[m
+ [m
+ # DC01[m
+ execute-assembly PowerView.ps1 Add-DomainObjectAcl -TargetIdentity "DC=meridian,DC=local" -PrincipalIdentity awalker -Rights DCSync[m
+[31m-execute-assembly mimikatz.exe "lsadump::dcsync /domain:meridian.local /user:krbtgt"[m
+\ No newline at end of file[m
+[32m+[m[32mexecute-assembly mimikatz.exe "lsadump::dcsync /domain:meridian.local /user:krbtgt"[m
+[32m+[m
+[32m+[m
+[32m+[m[32mcd ~/Desktop/projects/TenantZero/server &&   export DATABASE_URL="postgres://tenantzero:tenantzero@localhost/tenantzero?sslmode=disable" &&   export JWT_SECRET="dev-secret-change-in-prod" &&   export LABS_DIR="../labs" &&   go run .[m
+[1mdiff --git a/labs/ad/op-chainlink/lab.yaml b/labs/ad/op-chainlink/lab.yaml[m
+[1mindex d10adbc..cffd3f2 100644[m
+[1m--- a/labs/ad/op-chainlink/lab.yaml[m
+[1m+++ b/labs/ad/op-chainlink/lab.yaml[m
+[36m@@ -9,12 +9,29 @@[m [mdomain:[m
+ [m
+ forests:[m
+   - forest_name: meridian.local[m
+[32m+[m[32m# ── Alpine Forest ─────────────────────────────────────────────────────────────[m
+[32m+[m[32m  - forest_name: alpine.corp[m
+[32m+[m[32m    domains:[m
+[32m+[m[32m      - alpine.corp[m
+[32m+[m[32m    subnets:[m
+[32m+[m[32m      - "10.10.30.0/24"[m
+[32m+[m
+     domains:[m
+       - meridian.local[m
+     subnets:[m
+       - "10.10.10.0/24"[m
+       - "10.10.20.0/24"[m
+ [m
+[32m+[m
+[32m+[m[32m# ── Trusts ────────────────────────────────────────────────────────────────────[m
+[32m+[m[32mtrusts:[m
+[32m+[m[32m  - source_forest: meridian.local[m
+[32m+[m[32m    target_forest: alpine.corp[m
+[32m+[m[32m    direction: outbound[m
+[32m+[m[32m    trust_type: forest[m
+[32m+[m[32m    sid_filtering: true[m
+[32m+[m[32m    filtering_enabled: true[m
+[32m+[m
+ # ── Hosts ────────────────────────────────────────────────────────────────────[m
+ hosts:[m
+   - hostname: WKSTN01[m
+[36m@@ -107,6 +124,45 @@[m [mhosts:[m
+           - winrm_access[m
+           - wmi_access[m
+ [m
+[32m+[m
+[32m+[m[32m  - hostname: ALPHADC01[m
+[32m+[m[32m    ip: "10.10.30.1"[m
+[32m+[m[32m    role: domain_controller[m
+[32m+[m[32m    os: "Windows Server 2019"[m
+[32m+[m[32m    forest: alpine.corp[m
+[32m+[m[32m    in_scope: true[m
+[32m+[m[32m    staged_tools:[m
+[32m+[m[32m      - 'C:\tools\mimikatz.exe'[m
+[32m+[m[32m      - 'C:\tools\Rubeus.exe'[m
+[32m+[m[32m    reachable_from:[m
+[32m+[m[32m      - DEVWKSTN01[m
+[32m+[m[32m    rights:[m
+[32m+[m[32m      - principal: 'ALPINE\\svc_link'[m
+[32m+[m[32m        rights:[m
+[32m+[m[32m          - local_admin[m
+[32m+[m[32m          - winrm_access[m
+[32m+[m[32m      - principal: 'ALPINE\\Administrator'[m
+[32m+[m[32m        rights:[m
+[32m+[m[32m          - local_admin[m
+[32m+[m[32m          - winrm_access[m
+[32m+[m
+[32m+[m[32m  - hostname: DEVWKSTN01[m
+[32m+[m[32m    ip: "10.10.30.10"[m
+[32m+[m[32m    role: workstation[m
+[32m+[m[32m    os: "Windows 10 Enterprise"[m
+[32m+[m[32m    forest: alpine.corp[m
+[32m+[m[32m    in_scope: true[m
+[32m+[m[32m    staged_tools:[m
+[32m+[m[32m      - 'C:\tools\Rubeus.exe'[m
+[32m+[m[32m      - 'C:\tools\mimikatz.exe'[m
+[32m+[m[32m    reachable_from:[m
+[32m+[m[32m      - DC01[m
+[32m+[m[32m    rights:[m
+[32m+[m[32m      - principal: 'ALPINE\\svc_link'[m
+[32m+[m[32m        rights:[m
+[32m+[m[32m          - local_admin[m
+[32m+[m[32m          - winrm_access[m
+[32m+[m
+   - hostname: HRWKSTN01[m
+     ip: "10.10.20.25"[m
+     role: workstation[m
+[36m@@ -161,6 +217,15 @@[m [mrelationships:[m
+     from: SQLSVR01[m
+     to: DC01[m
+     requires_right: winrm_access[m
+[32m+[m[32m  - type: can_pivot_to[m
+[32m+[m[32m    from: DC01[m
+[32m+[m[32m    to: DEVWKSTN01[m
+[32m+[m[32m    requires_right: inter_realm_ticket[m
+[32m+[m[32m  - type: can_pivot_to[m
+[32m+[m[32m    from: DEVWKSTN01[m
+[32m+[m[32m    to: ALPHADC01[m
+[32m+[m[32m    requires_right: winrm_access[m
+[32m+[m
+ [m
+ # ── Users ─────────────────────────────────────────────────────────────────────[m
+ users:[m
+[36m@@ -328,6 +393,16 @@[m [mwin_conditions:[m
+     points: 50[m
+     required: false[m
+ [m
+[32m+[m
+[32m+[m[32m  - id: wc-dcsync-alpine-krbtgt[m
+[32m+[m[32m    description: "DCSync alpine.corp and extract the alpine krbtgt NTLM hash"[m
+[32m+[m[32m    type: loot[m
+[32m+[m[32m    params:[m
+[32m+[m[32m      loot_type: hash[m
+[32m+[m[32m      loot_value_contains: alpine_krbtgt[m
+[32m+[m[32m    points: 150[m
+[32m+[m[32m    required: false[m
+[32m+[m
+   - id: wc-dcsync-krbtgt[m
+     description: "Execute DCSync and extract the krbtgt NTLM hash"[m
+     type: loot[m
+[1mdiff --git a/server/engine/jump.go b/server/engine/jump.go[m
+[1mindex 847446f..30dece8 100644[m
+[1m--- a/server/engine/jump.go[m
+[1m+++ b/server/engine/jump.go[m
+[36m@@ -54,11 +54,32 @@[m [mfunc (s *Session) handleJump(args []string) (string, []schema.SideEffect, error)[m
+ 	// (active user + impersonated tokens/tickets acquired this session).[m
+ 	callers := s.effectiveCallers()[m
+ 	hasRight := false[m
+[31m-	for _, caller := range callers {[m
+[31m-		if s.HasRuntimeACL(caller, targetHost, requiredRight) ||[m
+[31m-			s.labGrantsRight(caller, targetHost, requiredRight) {[m
+[31m-			hasRight = true[m
+[31m-			break[m
+[32m+[m
+[32m+[m	[32m// Cross-forest pivot: requires an inter-realm TGT for the target forest[m
+[32m+[m	[32mif requiredRight == "inter_realm_ticket" {[m
+[32m+[m		[32mtargetForest := s.hostForest(targetHost)[m
+[32m+[m		[32mfor i := range s.State.Tickets {[m
+[32m+[m			[32mt := &s.State.Tickets[i][m
+[32m+[m			[32mif t.TicketType == "TGT" && strings.EqualFold(t.Target, targetForest) {[m
+[32m+[m				[32mhasRight = true[m
+[32m+[m				[32m// Pivot as the ticket holder into the foreign forest[m
+[32m+[m				[32ms.State.ActiveUser = t.Identity + "@" + strings.ToUpper(targetForest)[m
+[32m+[m				[32mbreak[m
+[32m+[m			[32m}[m
+[32m+[m		[32m}[m
+[32m+[m		[32mif !hasRight {[m
+[32m+[m			[32mreturn "", nil, fmt.Errorf([m
+[32m+[m				[32m"access denied — no inter-realm TGT for %s found\n[*] Hint: use Rubeus asktgt /user:<user> /password:<pass> /domain:%s",[m
+[32m+[m				[32mtargetForest, targetForest,[m
+[32m+[m			[32m)[m
+[32m+[m		[32m}[m
+[32m+[m	[32m} else {[m
+[32m+[m		[32mfor _, caller := range callers {[m
+[32m+[m			[32mif s.HasRuntimeACL(caller, targetHost, requiredRight) ||[m
+[32m+[m				[32ms.labGrantsRight(caller, targetHost, requiredRight) {[m
+[32m+[m				[32mhasRight = true[m
+[32m+[m				[32mbreak[m
+[32m+[m			[32m}[m
+ 		}[m
+ 	}[m
+ [m
+[36m@@ -205,3 +226,16 @@[m [mfunc (s *Session) DebugJump(method, target string) string {[m
+ 		strings.Join(aclResults, "\n"),[m
+ 	)[m
+ }[m
+[32m+[m
+[32m+[m[32m// hostForest returns the forest FQDN a host belongs to.[m
+[32m+[m[32m// Falls back to the primary domain if the host has no forest field set.[m
+[32m+[m[32mfunc (s *Session) hostForest(hostname string) string {[m
+[32m+[m	[32mfor _, h := range s.Lab.Hosts {[m
+[32m+[m		[32mif strings.EqualFold(h.Hostname, hostname) {[m
+[32m+[m			[32mif h.Forest != "" {[m
+[32m+[m				[32mreturn h.Forest[m
+[32m+[m			[32m}[m
+[32m+[m		[32m}[m
+[32m+[m	[32m}[m
+[32m+[m	[32mreturn s.Lab.Domain.Name[m
+[32m+[m[32m}[m
+[1mdiff --git a/server/engine/providers/ad/ad.go b/server/engine/providers/ad/ad.go[m
+[1mindex 0ded5a6..1630d68 100644[m
+[1m--- a/server/engine/providers/ad/ad.go[m
+[1m+++ b/server/engine/providers/ad/ad.go[m
+[36m@@ -450,3 +450,34 @@[m [mfunc (p *ADProvider) GetACLs() []schema.ACL {[m
+ func (p *ADProvider) GetDelegations() []schema.Delegation {[m
+ 	return p.lab.Delegations[m
+ }[m
+[32m+[m
+[32m+[m[32m// ValidateCrossForestCredentials checks credentials for a foreign-forest account.[m
+[32m+[m[32m// Matches against Users with a matching forest field, or Identities.[m
+[32m+[m[32mfunc (p *ADProvider) ValidateCrossForestCredentials(username, password, ntlm, targetDomain string) bool {[m
+[32m+[m	[32mfor _, u := range p.lab.Users {[m
+[32m+[m		[32mif !strings.EqualFold(u.SAMAccountName, username) {[m
+[32m+[m			[32mcontinue[m
+[32m+[m		[32m}[m
+[32m+[m		[32mif u.Forest != "" && !strings.EqualFold(u.Forest, targetDomain) {[m
+[32m+[m			[32mcontinue[m
+[32m+[m		[32m}[m
+[32m+[m		[32mif ntlm != "" && strings.EqualFold(u.NTHash, ntlm) {[m
+[32m+[m			[32mreturn true[m
+[32m+[m		[32m}[m
+[32m+[m		[32mif password != "" && u.Password == password {[m
+[32m+[m			[32mreturn true[m
+[32m+[m		[32m}[m
+[32m+[m	[32m}[m
+[32m+[m	[32mfor _, id := range p.lab.Identities {[m
+[32m+[m		[32mif !strings.EqualFold(id.Account, username) {[m
+[32m+[m			[32mcontinue[m
+[32m+[m		[32m}[m
+[32m+[m		[32mif id.Forest != "" && !strings.EqualFold(id.Forest, targetDomain) {[m
+[32m+[m			[32mcontinue[m
+[32m+[m		[32m}[m
+[32m+[m		[32mif password != "" && id.Password == password {[m
+[32m+[m			[32mreturn true[m
+[32m+[m		[32m}[m
+[32m+[m	[32m}[m
+[32m+[m	[32mreturn false[m
+[32m+[m[32m}[m
+[1mdiff --git a/server/engine/providers/provider.go b/server/engine/providers/provider.go[m
+[1mindex e98ca36..a6f6cff 100644[m
+[1m--- a/server/engine/providers/provider.go[m
+[1m+++ b/server/engine/providers/provider.go[m
+[36m@@ -156,6 +156,10 @@[m [mtype Provider interface {[m
+ 	// rather than a password, since Entra auth is token-based.[m
+ 	ValidateCredentials(username, password string) bool[m
+ [m
+[32m+[m	[32m// ValidateCrossForestCredentials validates credentials for a user in a foreign forest.[m
+[32m+[m	[32m// Checks Identities with matching forest/domain, then Users with forest field set.[m
+[32m+[m	[32mValidateCrossForestCredentials(username, password, ntlm, targetDomain string) bool[m
+[32m+[m
+ 	// ValidateNTLM returns true if username:NTHash is a valid pair.[m
+ 	// Checks SessionState.Loot.NTLMHashes. Used by pass-the-hash paths in[m
+ 	// CME, Impacket, and Mimikatz tools.[m
+[1mdiff --git a/server/engine/tools/ad/rubeus.go b/server/engine/tools/ad/rubeus.go[m
+[1mindex 9cd109d..8517824 100644[m
+[1m--- a/server/engine/tools/ad/rubeus.go[m
+[1m+++ b/server/engine/tools/ad/rubeus.go[m
+[36m@@ -208,8 +208,19 @@[m [mfunc (r *Rubeus) asktgt([m
+ 	domain := providers.GetDomain(provider)[m
+ 	domainUpper := strings.ToUpper(domain)[m
+ [m
+[32m+[m	[32m// Cross-forest: /domain: flag overrides the local domain[m
+[32m+[m	[32mtargetDomain := flagValue(cmd.Flags, "domain")[m
+[32m+[m	[32mif targetDomain == "" {[m
+[32m+[m		[32mtargetDomain = domain[m
+[32m+[m	[32m}[m
+[32m+[m	[32mtargetDomainUpper := strings.ToUpper(targetDomain)[m
+[32m+[m	[32misCrossForest := !strings.EqualFold(targetDomain, domain)[m
+[32m+[m
+ 	var valid bool[m
+[31m-	if ntlm != "" {[m
+[32m+[m	[32mif isCrossForest {[m
+[32m+[m		[32m// Look up user in Identities (foreign forest accounts)[m
+[32m+[m		[32mvalid = provider.ValidateCrossForestCredentials(user, password, ntlm, targetDomain)[m
+[32m+[m	[32m} else if ntlm != "" {[m
+ 		valid = provider.ValidateNTLM(user, ntlm)[m
+ 	} else {[m
+ 		valid = provider.ValidateCredentials(user, password)[m
+[36m@@ -218,11 +229,13 @@[m [mfunc (r *Rubeus) asktgt([m
+ 	if !valid {[m
+ 		return schema.ToolResult{[m
+ 			Output: fmt.Sprintf([m
+[31m-				"[*] Action: Ask TGT\r\n\r\n[*] Using %s\r\n\r\n[-] Kerberos SessionError: KDC_ERR_PREAUTH_FAILED\r\n",[m
+[31m-				credLine(user, domainUpper, password, ntlm),[m
+[32m+[m				[32m"[*] Action: Ask TGT\r\n\r\n[*] Using %s\r\n\r\n[-] Kerberos SessionError: KDC_ERR_PREAUTH_FAILED\r\n[-] Check /domain: flag and credentials for %s\r\n",[m
+[32m+[m				[32mcredLine(user, targetDomainUpper, password, ntlm), targetDomain,[m
+ 			),[m
+ 		}[m
+ 	}[m
+[32m+[m	[32m// Use the target domain for ticket issuance[m
+[32m+[m	[32mdomainUpper = targetDomainUpper[m
+ [m
+ 	now := time.Now()[m
+ 	expiresAt := now.Add(10 * time.Hour)[m
+[1mdiff --git a/shared/schema/lab.go b/shared/schema/lab.go[m
+[1mindex fa6f651..c0c7073 100644[m
+[1m--- a/shared/schema/lab.go[m
+[1m+++ b/shared/schema/lab.go[m
+[36m@@ -96,6 +96,7 @@[m [mtype User struct {[m
+ 	AdminCount              bool     `yaml:"admincount" json:"adminCount"`[m
+ 	UnconstrainedDelegation bool     `yaml:"unconstrained_delegation" json:"unconstrainedDelegation"`[m
+ 	PasswordNeverExpires    bool     `yaml:"password_never_expires" json:"passwordNeverExpires"`[m
+[32m+[m	[32mForest                  string   `yaml:"forest" json:"forest"`[m
+ }[m
+ [m
+ type Group struct {[m

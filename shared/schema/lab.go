@@ -96,6 +96,7 @@ type User struct {
 	AdminCount              bool     `yaml:"admincount" json:"adminCount"`
 	UnconstrainedDelegation bool     `yaml:"unconstrained_delegation" json:"unconstrainedDelegation"`
 	PasswordNeverExpires    bool     `yaml:"password_never_expires" json:"passwordNeverExpires"`
+	Forest                  string   `yaml:"forest" json:"forest"`
 }
 
 type Group struct {

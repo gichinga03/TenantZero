@@ -54,11 +54,32 @@ func (s *Session) handleJump(args []string) (string, []schema.SideEffect, error)
 	// (active user + impersonated tokens/tickets acquired this session).
 	callers := s.effectiveCallers()
 	hasRight := false
-	for _, caller := range callers {
-		if s.HasRuntimeACL(caller, targetHost, requiredRight) ||
-			s.labGrantsRight(caller, targetHost, requiredRight) {
-			hasRight = true
-			break
+
+	// Cross-forest pivot: requires an inter-realm TGT for the target forest
+	if requiredRight == "inter_realm_ticket" {
+		targetForest := s.hostForest(targetHost)
+		for i := range s.State.Tickets {
+			t := &s.State.Tickets[i]
+			if t.TicketType == "TGT" && strings.EqualFold(t.Target, targetForest) {
+				hasRight = true
+				// Pivot as the ticket holder into the foreign forest
+				s.State.ActiveUser = t.Identity + "@" + strings.ToUpper(targetForest)
+				break
+			}
+		}
+		if !hasRight {
+			return "", nil, fmt.Errorf(
+				"access denied — no inter-realm TGT for %s found\n[*] Hint: use Rubeus asktgt /user:<user> /password:<pass> /domain:%s",
+				targetForest, targetForest,
+			)
+		}
+	} else {
+		for _, caller := range callers {
+			if s.HasRuntimeACL(caller, targetHost, requiredRight) ||
+				s.labGrantsRight(caller, targetHost, requiredRight) {
+				hasRight = true
+				break
+			}
 		}
 	}
 
@@ -204,4 +225,17 @@ func (s *Session) DebugJump(method, target string) string {
 		canPivot, found, rights,
 		strings.Join(aclResults, "\n"),
 	)
+}
+
+// hostForest returns the forest FQDN a host belongs to.
+// Falls back to the primary domain if the host has no forest field set.
+func (s *Session) hostForest(hostname string) string {
+	for _, h := range s.Lab.Hosts {
+		if strings.EqualFold(h.Hostname, hostname) {
+			if h.Forest != "" {
+				return h.Forest
+			}
+		}
+	}
+	return s.Lab.Domain.Name
 }

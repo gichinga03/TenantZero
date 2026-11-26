@@ -208,8 +208,19 @@ func (r *Rubeus) asktgt(
 	domain := providers.GetDomain(provider)
 	domainUpper := strings.ToUpper(domain)
 
+	// Cross-forest: /domain: flag overrides the local domain
+	targetDomain := flagValue(cmd.Flags, "domain")
+	if targetDomain == "" {
+		targetDomain = domain
+	}
+	targetDomainUpper := strings.ToUpper(targetDomain)
+	isCrossForest := !strings.EqualFold(targetDomain, domain)
+
 	var valid bool
-	if ntlm != "" {
+	if isCrossForest {
+		// Look up user in Identities (foreign forest accounts)
+		valid = provider.ValidateCrossForestCredentials(user, password, ntlm, targetDomain)
+	} else if ntlm != "" {
 		valid = provider.ValidateNTLM(user, ntlm)
 	} else {
 		valid = provider.ValidateCredentials(user, password)
@@ -218,11 +229,13 @@ func (r *Rubeus) asktgt(
 	if !valid {
 		return schema.ToolResult{
 			Output: fmt.Sprintf(
-				"[*] Action: Ask TGT\r\n\r\n[*] Using %s\r\n\r\n[-] Kerberos SessionError: KDC_ERR_PREAUTH_FAILED\r\n",
-				credLine(user, domainUpper, password, ntlm),
+				"[*] Action: Ask TGT\r\n\r\n[*] Using %s\r\n\r\n[-] Kerberos SessionError: KDC_ERR_PREAUTH_FAILED\r\n[-] Check /domain: flag and credentials for %s\r\n",
+				credLine(user, targetDomainUpper, password, ntlm), targetDomain,
 			),
 		}
 	}
+	// Use the target domain for ticket issuance
+	domainUpper = targetDomainUpper
 
 	now := time.Now()
 	expiresAt := now.Add(10 * time.Hour)
