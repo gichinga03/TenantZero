@@ -400,7 +400,7 @@ func (p *ADProvider) DomainName() string {
 func (p *ADProvider) GetUsersWithSPN() []schema.User {
 	var out []schema.User
 	for _, u := range p.lab.Users {
-		if len(u.SPNs) > 0 {
+		if len(u.SPNs) > 0 && u.SAMAccountName != "krbtgt" {
 			out = append(out, u)
 		}
 	}

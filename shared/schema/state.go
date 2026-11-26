@@ -48,6 +48,8 @@ type Loot struct {
 }
 
 type Ticket struct {
+	LUID       string    `json:"luid"`
+	RenewTill  time.Time `json:"renewTill"`
 	TicketType string    `json:"ticketType"` // "TGT", "TGS", "ST"
 	Identity   string    `json:"identity"`
 	Target     string    `json:"target"`

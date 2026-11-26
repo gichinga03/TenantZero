@@ -1,5 +1,7 @@
 package schema
 
+import "time"
+
 type RawInput struct {
 	SessionID string `json:"sessionId"`
 	BeaconID  string `json:"beaconId"`
@@ -33,7 +35,10 @@ type SideEffect struct {
 	TicketType string `json:"ticketType,omitempty"`
 	Identity   string `json:"identity,omitempty"`
 	Target     string `json:"target,omitempty"`
-	TicketB64  string `json:"ticketB64,omitempty"`
+	TicketB64       string    `json:"ticketB64,omitempty"`
+	TicketLUID      string    `json:"ticketLuid,omitempty"`
+	TicketExpiresAt time.Time `json:"ticketExpiresAt,omitempty"`
+	TicketRenewTill time.Time `json:"ticketRenewTill,omitempty"`
 
 	// SideEffectSetSessionUser — Type: "set_session_user"
 	NewUser string `json:"newUser,omitempty"`

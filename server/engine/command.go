@@ -331,32 +331,17 @@ func (s *Session) Dispatch(cmd schema.ParsedCommand) schema.ToolResult {
 		if len(toks) > 0 && strings.HasSuffix(toks[0], ".exe") && !strings.HasPrefix(rawLower, "execute-assembly ") {
 			return schema.ToolResult{Output: fmt.Sprintf("[-] '%s' is not a recognized internal command.\r\n[*] Use 'execute-assembly C:\\tools\\%s <args>' to run .NET assemblies.", toks[0], toks[0])}
 		}
-		// Validate execute-assembly path against staged_tools for current host.
-		// Compare by filename only so "C:\\tools\\Rubeus.exe" matches "rubeus.exe".
+		// Validate execute-assembly — check against the tool registry, not staged_tools.
+		// staged_tools in the YAML is cosmetic flavour only; any registered tool works on any host.
 		if strings.HasPrefix(rawLower, "execute-assembly ") && len(toks) > 1 {
 			assemblyPath := toks[1]
 			asmFile := assemblyPath
 			if idx := strings.LastIndexAny(asmFile, `/\\`); idx >= 0 {
 				asmFile = asmFile[idx+1:]
 			}
-			stagedOK := false
-			var stagedList []string
-			for _, host := range s.Lab.Hosts {
-				if strings.EqualFold(host.Hostname, s.State.ActiveHost) {
-					stagedList = host.StagedTools
-					for _, staged := range host.StagedTools {
-						stagedFile := staged
-						if idx := strings.LastIndexAny(stagedFile, `/\\`); idx >= 0 {
-							stagedFile = stagedFile[idx+1:]
-						}
-						if strings.EqualFold(stagedFile, asmFile) {
-							stagedOK = true
-						}
-					}
-				}
-			}
-			if !stagedOK {
-				return schema.ToolResult{Output: fmt.Sprintf("[-] Assembly not found: %s\r\n[*] Staged tools on %s: %s", toks[1], s.State.ActiveHost, strings.Join(stagedList, ", "))}
+			asmFile = strings.ToLower(strings.TrimSuffix(asmFile, ".exe"))
+			if _, ok := s.Registry.Get(asmFile); !ok {
+				return schema.ToolResult{Output: fmt.Sprintf("[-] Assembly not found: %s\r\n[*] Unknown tool — available: %s", toks[1], strings.Join(s.Registry.Names(), ", "))}
 			}
 		}
 	}

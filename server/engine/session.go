@@ -81,14 +81,23 @@ func (s *Session) applySideEffect(e schema.SideEffect) {
 		})
 
 	case schema.SideEffectTypeTicket:
-		s.State.Tickets = append(s.State.Tickets, schema.Ticket{
+		tkt := schema.Ticket{
 			TicketType: e.TicketType,
 			Identity:   e.Identity,
 			Target:     e.Target,
 			B64:        e.TicketB64,
+			LUID:       e.TicketLUID,
 			IssuedAt:   time.Now(),
 			ExpiresAt:  time.Now().Add(10 * time.Hour),
-		})
+			RenewTill:  time.Now().Add(7 * 24 * time.Hour),
+		}
+		if !e.TicketExpiresAt.IsZero() {
+			tkt.ExpiresAt = e.TicketExpiresAt
+		}
+		if !e.TicketRenewTill.IsZero() {
+			tkt.RenewTill = e.TicketRenewTill
+		}
+		s.State.Tickets = append(s.State.Tickets, tkt)
 
 	case schema.SideEffectTypeSetSessionUser:
 		s.State.ActiveUser = e.NewUser
