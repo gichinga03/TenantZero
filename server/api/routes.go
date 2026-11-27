@@ -43,5 +43,6 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, wsHandler *ws.Handler) {
 		}
 	})
 
+	mux.HandleFunc("POST /api/beacon/generate", h.requireAuth(h.handleBeaconGenerate))
 	mux.HandleFunc("GET /ws", wsHandler.ServeWS)
 }

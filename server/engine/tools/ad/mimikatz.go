@@ -3,8 +3,10 @@ package ad
 
 import (
 	"fmt"
+	"log"
 	"hash/fnv"
 	"strings"
+	"regexp"
 	"time"
 
 	"github.com/0x4D67/tenantzero/server/engine/providers"
@@ -66,16 +68,22 @@ func (m *Mimikatz) Execute(
 		subcmd = strings.ToLower(subcmdParts[0])
 	}
 
-	// Flags come from cmd.Flags (parsed by parseFlags in command.go), not subcmdParts.
-	// parseMimikatzFlags expects []string of "/key:val" but cmd.Flags is map[string]string already.
-	// Merge both: subcmdParts[1:] for inline args, cmd.Flags for pre-parsed flags.
-	flags := parseMimikatzFlags(subcmdParts[1:])
+	// Use flags already parsed by parseMimikatz in command.go — they preserve
+	// quoted values like /cmd:powershell -c "...". Only fall back to local
+	// re-parsing for flags not already present.
+	flags := make(map[string]string)
 	for k, v := range cmd.Flags {
-		if _, exists := flags[strings.ToLower(k)]; !exists {
-			flags[strings.ToLower(k)] = v
+		flags[strings.ToLower(k)] = v
+	}
+	// Fill in any flags from subcmdParts that aren't already in cmd.Flags
+	for k, v := range parseMimikatzFlags(subcmdParts[1:]) {
+		if _, exists := flags[k]; !exists {
+			flags[k] = v
 		}
 	}
 
+	log.Printf("[mimikatz] dispatch module=%q subcmd=%q invocation=%q", module, subcmd, invocation)
+	log.Printf("[mimikatz] dispatch module=%q subcmd=%q invocation=%q", module, subcmd, invocation)
 	switch module + "::" + subcmd {
 	case "sekurlsa::logonpasswords":
 		return m.sekurlsaLogonPasswords(state, provider)
@@ -507,7 +515,30 @@ func (m *Mimikatz) sqlXpCmdshell(
 	state *schema.SessionState,
 	provider providers.Provider,
 ) schema.ToolResult {
-	cmd, hasCmd := flags["cmd"]
+	// Extract /cmd: from raw flags first; fall back to pre-parsed flags map.
+	// Pre-parsing splits on spaces so "/cmd:powershell -c ..." loses everything after "powershell".
+	// Instead, reconstruct the full value from the raw invocation stored in flags["_raw"].
+	// Always extract /cmd: from _raw to preserve spaces and quotes in the value.
+	// The pre-parsed flags["cmd"] only captures the first token.
+	var cmd string
+	hasCmd := false
+	if raw, ok := flags["_raw"]; ok {
+		log.Printf("[xpcmdshell] _raw=%q", raw)
+		rawLower := strings.ToLower(raw)
+		if idx := strings.Index(rawLower, "/cmd:"); idx >= 0 {
+			cmd = strings.TrimSpace(raw[idx+5:])
+			// Strip a single surrounding quote pair
+			if len(cmd) >= 2 && cmd[0] == '"' && cmd[len(cmd)-1] == '"' {
+				cmd = cmd[1 : len(cmd)-1]
+			}
+			hasCmd = true
+		}
+	}
+	if !hasCmd {
+		cmd = flags["cmd"]
+		hasCmd = cmd != ""
+	}
+	log.Printf("[xpcmdshell] final cmd=%q hasCmd=%v", cmd, hasCmd)
 
 	// Check the caller has sql_admin on this host
 	if !provider.HasSQLAdmin(state.ActiveUser, state.ActiveHost) {
@@ -560,6 +591,7 @@ func (m *Mimikatz) sqlXpCmdshell(
 
 	sb.WriteString("\r\n(1 rows affected)\r\n")
 
+	// Detect beacon download cradle patterns and spawn a SYSTEM beacon
 	effects := []schema.SideEffect{
 		{
 			Type:       schema.SideEffectTypeLoot,
@@ -568,5 +600,67 @@ func (m *Mimikatz) sqlXpCmdshell(
 			LootSource: "sql." + state.ActiveHost + ".exec",
 		},
 	}
+
+	buildID := extractBeaconBuildID(cmd)
+	if buildID != "" {
+		matched := false
+		for _, b := range state.Builds {
+			if b.ID == buildID {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			sb.WriteString("\r\n[*] Payload delivered — waiting for callback...\r\n")
+			sb.WriteString("[+] New beacon checked in — " + state.ActiveHost + " (NT AUTHORITY\\SYSTEM)  pid:" + pseudoPIDStr(state.ActiveHost) + "\r\n")
+			effects = append(effects, schema.SideEffect{
+				Type:            schema.SideEffectTypeNewBeacon,
+				BeaconHost:      state.ActiveHost,
+				BeaconIdentity:  "NT AUTHORITY\\SYSTEM",
+				BeaconPrivilege: "SYSTEM",
+			})
+		} else {
+			sb.WriteString("\r\n[-] Payload not found — generate a beacon first (BeaconGen tab)\r\n")
+		}
+	}
+
 	return schema.ToolResult{Output: sb.String(), Effects: effects}
+}
+
+// extractBeaconBuildID scans a command string for download cradle patterns
+// referencing a beacon-XXXXXX URL and returns the 6-char hex build ID.
+func extractBeaconBuildID(cmd string) string {
+	patterns := []string{
+		`DownloadString(`,
+		`certutil`,
+		`bitsadmin`,
+		`wget `,
+		`curl `,
+	}
+	hasPattern := false
+	for _, p := range patterns {
+		if strings.Contains(strings.ToLower(cmd), strings.ToLower(p)) {
+			hasPattern = true
+			break
+		}
+	}
+	if !hasPattern {
+		return ""
+	}
+	// Find "beacon-XXXXXX" in the URL — 6 hex chars
+	re := regexp.MustCompile(`beacon-([0-9a-fA-F]{6})`)
+	m := re.FindStringSubmatch(cmd)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
+// pseudoPIDStr returns a stable PID string for a hostname.
+func pseudoPIDStr(hostname string) string {
+	sum := 0
+	for _, c := range hostname {
+		sum += int(c)
+	}
+	return fmt.Sprintf("%d", 1000+(sum%64000))
 }

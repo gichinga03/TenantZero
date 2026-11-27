@@ -147,6 +147,20 @@ func (s *Session) applySideEffect(e schema.SideEffect) {
 		s.State.BeaconTree = append(s.State.BeaconTree, beacon)
 		s.State.ActiveBeaconID = newID
 
+	case schema.SideEffectTypeNewBeacon:
+		newID := randomHex(8)
+		beacon := schema.Beacon{
+			ID:          newID,
+			ParentID:    s.State.ActiveBeaconID,
+			Host:        e.BeaconHost,
+			Identity:    e.BeaconIdentity,
+			Active:      true,
+			CheckedInAt: time.Now(),
+			Tasks:       []schema.Task{},
+		}
+		s.State.BeaconTree = append(s.State.BeaconTree, beacon)
+		// Do NOT switch ActiveBeaconID — player must switch manually
+
 	case schema.SideEffectTypePivotContext:
 		s.State.ActiveHost = e.PivotHost
 		s.State.ActiveUser = e.PivotIdentity

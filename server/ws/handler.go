@@ -97,8 +97,13 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send initial beacon state so frontend can replace SEED_BEACONS
-	initPayload, _ := json.Marshal(sess.State.BeaconTree)
+	// Send initial beacon state + session ID so frontend can use the API
+	type initMsg struct {
+		SessionID string        `json:"sessionId"`
+		Beacons   interface{}  `json:"beacons"`
+	}
+	log.Printf("ws: session established sessRow.ID=%q", sessRow.ID)
+	initPayload, _ := json.Marshal(initMsg{SessionID: sessRow.ID, Beacons: sess.State.BeaconTree})
 	writeMsg(conn, serverMsg{Type: "event", EventType: "session_init", Payload: string(initPayload)})
 
 	for {
@@ -135,6 +140,20 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Parse and dispatch.
+		// Re-read session state from DB before dispatch so REST API writes
+		// (e.g. BeaconGen builds) are visible to the engine.
+		{
+			fresh, err := h.store.LoadSession(sessRow.ID)
+			if err == nil {
+				var freshState schema.SessionState
+				if jsonErr := json.Unmarshal(fresh.State, &freshState); jsonErr == nil {
+					sess.State.Builds = freshState.Builds
+					log.Printf("ws: refreshed builds count=%d", len(freshState.Builds))
+				} else {
+					log.Printf("ws: freshState unmarshal error: %v", jsonErr)
+				}
+			}
+		}
 		parsed := engine.Parse(msg.Payload)
 		result := sess.Dispatch(parsed)
 
@@ -191,6 +210,21 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 					if strings.EqualFold(b.Host, eff.BeaconHost) && b.Active {
 						beaconJSON, _ := json.Marshal(b)
 						log.Printf("ws: sending beacon_spawned: %s", string(beaconJSON))
+						writeMsg(conn, serverMsg{
+							Type:      "event",
+							EventType: "beacon_spawned",
+							Payload:   string(beaconJSON),
+						})
+						break
+					}
+				}
+			}
+			if eff.Type == schema.SideEffectTypeNewBeacon {
+				for _, b := range sess.State.BeaconTree {
+					if strings.EqualFold(b.Host, eff.BeaconHost) &&
+						strings.EqualFold(b.Identity, eff.BeaconIdentity) && b.Active {
+						beaconJSON, _ := json.Marshal(b)
+						log.Printf("ws: sending beacon_spawned (SYSTEM): %s", string(beaconJSON))
 						writeMsg(conn, serverMsg{
 							Type:      "event",
 							EventType: "beacon_spawned",

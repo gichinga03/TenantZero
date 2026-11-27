@@ -59,6 +59,7 @@ type SideEffect struct {
 	// SideEffectSpawnBeacon — Type: "spawn_beacon"
 	BeaconHost     string `json:"beaconHost,omitempty"`
 	BeaconIdentity string `json:"beaconIdentity,omitempty"`
+	BeaconPrivilege string `json:"beaconPrivilege,omitempty"`
 	BeaconParentID string `json:"beaconParentId,omitempty"`
 
 	// SideEffectPivotContext — Type: "pivot_context"
@@ -77,6 +78,7 @@ const (
 	SideEffectTypeCompleteObj    = "complete_objective"
 	SideEffectTypeGrantACL       = "acl_granted"
 	SideEffectTypeSpawnBeacon    = "spawn_beacon"
+	SideEffectTypeNewBeacon      = "new_beacon"
 	SideEffectTypePivotContext   = "pivot_context"
 	SideEffectTypeScopeViolation = "scope_violation"
 )

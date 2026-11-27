@@ -81,19 +81,36 @@ func stripC2Prefix(raw string) (string, bool) {
 	// Strip the prefix and the path token, leaving "Tool.exe [args...]"
 	if strings.HasPrefix(lower, "execute-assembly") {
 		rest := strings.TrimSpace(raw[len("execute-assembly"):])
-		tokens := tokenise(rest)
-		if len(tokens) == 0 {
-			return "", true // empty inner — still recognised
+		if rest == "" {
+			return "", true
 		}
-		// tokens[0] is the assembly path; extract just the filename
-		pathTok := tokens[0]
-		// split on both / and backslash
-		if idx := strings.LastIndexAny(pathTok, `/\\`); idx >= 0 {
-			pathTok = pathTok[idx+1:]
+		var asmPath, argsRaw string
+		if strings.HasPrefix(rest, `"`) {
+			end := strings.Index(rest[1:], `"`)
+			if end >= 0 {
+				asmPath = rest[1 : end+1]
+				argsRaw = strings.TrimSpace(rest[end+2:])
+			} else {
+				asmPath = rest[1:]
+			}
+		} else {
+			if idx := strings.IndexAny(rest, " \t"); idx >= 0 {
+				asmPath = rest[:idx]
+				argsRaw = strings.TrimSpace(rest[idx+1:])
+			} else {
+				asmPath = rest
+			}
 		}
-		inner := pathTok
-		if len(tokens) > 1 {
-			inner = inner + " " + strings.Join(tokens[1:], " ")
+		if idx := strings.LastIndexAny(asmPath, `/\`); idx >= 0 {
+			asmPath = asmPath[idx+1:]
+		}
+		if len(argsRaw) >= 2 && argsRaw[0] == '"' && argsRaw[len(argsRaw)-1] == '"' {
+			argsRaw = argsRaw[1 : len(argsRaw)-1]
+			argsRaw = strings.ReplaceAll(argsRaw, `\"`, `"`)
+		}
+		inner := asmPath
+		if argsRaw != "" {
+			inner = inner + " " + argsRaw
 		}
 		return inner, true
 	}
@@ -127,7 +144,7 @@ func stripC2Prefix(raw string) (string, bool) {
 // isMimikatz returns true for the "mimikatz # …" shell-within-a-shell syntax.
 func isMimikatz(raw string) bool {
 	lower := strings.ToLower(raw)
-	return strings.HasPrefix(lower, "mimikatz") && strings.Contains(raw, "#")
+	return strings.HasPrefix(lower, "mimikatz") && (strings.Contains(raw, "#") || strings.Contains(raw, "::"))
 }
 
 // parseMimikatz handles: "mimikatz # module::command [/flag:val …]"
@@ -135,22 +152,74 @@ func isMimikatz(raw string) bool {
 func parseMimikatz(raw string) schema.ParsedCommand {
 	cmd := schema.ParsedCommand{Raw: raw}
 	cmd.Executable = "mimikatz"
+	defer func() { _ = 0 }() // noop
 
+	var rest string
 	hashIdx := strings.Index(raw, "#")
-	if hashIdx < 0 {
+	if hashIdx >= 0 {
+		// "mimikatz # sql::xpcmdshell ..."
+		rest = strings.TrimSpace(raw[hashIdx+1:])
+	} else {
+		// "mimikatz.exe sql::xpcmdshell ..." — skip the binary name token
+		spaceIdx := strings.IndexAny(raw, " 	")
+		if spaceIdx < 0 {
+			return cmd
+		}
+		rest = strings.TrimSpace(raw[spaceIdx+1:])
+		if len(rest) >= 2 && rest[0] == '"' && rest[len(rest)-1] == '"' {
+			rest = rest[1 : len(rest)-1]
+			rest = strings.ReplaceAll(rest, `\"`, `"`)
+		}
+	}
+
+	// Extract module::subcommand
+	coloncolon := strings.Index(rest, "::")
+	if coloncolon < 0 {
+		return cmd
+	}
+	afterModule := strings.TrimSpace(rest[coloncolon+2:])
+
+	// Split subcommand from flags: everything up to first space or slash
+	subcmd := afterModule
+	flagStr := ""
+	for i, c := range afterModule {
+		if c == ' ' || c == '/' {
+			subcmd = afterModule[:i]
+			flagStr = strings.TrimSpace(afterModule[i:])
+			break
+		}
+	}
+	// Preserve module prefix so Execute() can split on ::
+	moduleName := strings.ToLower(strings.TrimSpace(rest[:coloncolon]))
+	cmd.Subcommand = moduleName + "::" + strings.ToLower(subcmd)
+
+	if cmd.Flags == nil {
+		cmd.Flags = make(map[string]string)
+	}
+
+	// Store raw flag string for handlers that need re-parsing
+	cmd.Flags["_raw"] = afterModule
+
+	// Special case: extract /cmd: as everything after "/cmd:" in flagStr
+	// to preserve spaces inside the command value.
+	flagLower := strings.ToLower(flagStr)
+	if idx := strings.Index(flagLower, "/cmd:"); idx >= 0 {
+		cmdVal := flagStr[idx+5:]
+		// Strip surrounding escaped or real quotes
+		cmdVal = strings.TrimSpace(cmdVal)
+		cmdVal = strings.Trim(cmdVal, `"`)
+		cmd.Flags["cmd"] = cmdVal
+		// Parse any other flags that appear before /cmd:
+		before := strings.TrimSpace(flagStr[:idx])
+		if before != "" {
+			cmd = parseFlags(cmd, tokenise(before))
+		}
 		return cmd
 	}
 
-	rest := strings.TrimSpace(raw[hashIdx+1:])
-	tokens := tokenise(rest)
-	if len(tokens) == 0 {
-		return cmd
-	}
-
-	cmd.Subcommand = strings.ToLower(tokens[0])
-	return parseFlags(cmd, tokens[1:])
+	// No /cmd: — parse flags normally
+	return parseFlags(cmd, tokenise(flagStr))
 }
-
 // normaliseBinary lowercases and strips the .exe / .py suffix used for
 // display but not for registry lookup.
 func normaliseBinary(tok string) string {
@@ -273,8 +342,16 @@ func tokenise(raw string) []string {
 	var tokens []string
 	var cur strings.Builder
 	inQuote := false
+	runes := []rune(raw)
 
-	for _, r := range raw {
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		// Handle escaped quote — treat \" as literal quote, don't toggle inQuote
+		if r == '\\' && i+1 < len(runes) && runes[i+1] == '"' {
+			cur.WriteRune('"')
+			i++
+			continue
+		}
 		switch {
 		case r == '"':
 			inQuote = !inQuote

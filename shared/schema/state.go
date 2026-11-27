@@ -38,6 +38,7 @@ type SessionState struct {
 	UsedHints           []string            `json:"usedHints"`
 	StartedAt           time.Time           `json:"startedAt"`
 	LastActivityAt      time.Time           `json:"lastActivityAt"`
+	Builds []Build `json:"builds"`
 }
 
 type Loot struct {
@@ -77,4 +78,13 @@ type JournalEntry struct {
 	Identity  string    `json:"identity"`
 	RawInput  string    `json:"rawInput"`
 	Output    string    `json:"output"`
+}
+// Build represents a generated beacon payload.
+type Build struct {
+	ID         string    `json:"id"`
+	Listener   string    `json:"listener"`
+	Format     string    `json:"format"`
+	Arch       string    `json:"arch"`
+	HostedPath string    `json:"hostedPath"`
+	CreatedAt  time.Time `json:"createdAt"`
 }

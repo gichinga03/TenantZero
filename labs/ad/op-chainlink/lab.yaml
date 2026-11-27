@@ -437,6 +437,15 @@ win_conditions:
     points: 150
     required: false
 
+  - id: wc-beacon-delivery
+    description: "Deliver a beacon payload via xp_cmdshell and receive a SYSTEM callback on SQLSVR01"
+    type: loot
+    params:
+      loot_type: command_output
+      loot_value_contains: xp_cmdshell
+    points: 75
+    required: false
+
   - id: wc-dcsync-krbtgt
     description: "Execute DCSync and extract the krbtgt NTLM hash"
     type: loot
@@ -467,7 +476,11 @@ hints:
     text: "svc_backup has constrained delegation configured. Use Rubeus s4u to impersonate Administrator to MSSQLSvc/SQLSVR01."
   - id: hint-05
     min_elapsed_minutes: 90
-    text: "Once on SQLSVR01 as Administrator via S4U, enable xp_cmdshell and use it for code execution. Then pivot to DC01."
+    text: "Once on SQLSVR01 as Administrator via S4U, enable xp_cmdshell. Then open BeaconGen, generate a payload, and deliver it via xp_cmdshell to spawn a SYSTEM beacon. Switch to that beacon before jumping to DC01."
+  - id: hint-05b
+    min_elapsed_minutes: 95
+    text: "Use the BeaconGen tab to generate a payload. Copy the download cradle and run it via xp_cmdshell /cmd:. A SYSTEM beacon will check in — switch to it before jumping to DC01."
+
   - id: hint-06
     min_elapsed_minutes: 110
     text: "Add-DomainObjectAcl with -Rights DCSync grants the account replication rights. Then use mimikatz lsadump::dcsync."

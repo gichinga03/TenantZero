@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import Operations from './Operations'
+import { BeaconStoreProvider } from './BeaconStore'
 import BeaconGen from './BeaconGen'
 
 const C = {
@@ -23,8 +24,10 @@ interface AlloyNetProps {
 
 export default function AlloyNet({ token = '' }: AlloyNetProps) {
   const [activeTab, setActiveTab] = useState('operations')
+  const [sessionId, setSessionId]   = useState('')
 
   return (
+    <BeaconStoreProvider>
     <div style={{
       display: 'flex', flexDirection: 'column',
       width: '100%', height: '100%',
@@ -63,9 +66,10 @@ export default function AlloyNet({ token = '' }: AlloyNetProps) {
 
       {/* ── Tab content ─────────────────────────────────────── */}
       <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
-        {activeTab === 'operations' && <Operations token={token} />}
-        {activeTab === 'beacongen'  && <BeaconGen />}
+        {activeTab === 'operations' && <Operations token={token} onSessionId={setSessionId} />}
+        {activeTab === 'beacongen'  && <BeaconGen token={token} sessionId={sessionId} />}
       </div>
     </div>
+  </BeaconStoreProvider>
   )
 }

@@ -305,3 +305,96 @@ func jsonError(w http.ResponseWriter, msg string, status int) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
+// handleBeaconGenerate creates a new beacon build entry in the active session.
+//
+// POST /api/beacon/generate
+// Header: Authorization: Bearer <jwt>
+// Body: {"sessionId":"...","listener":"http","format":"exe","arch":"x64"}
+// Response: {"id":"a1b2c3","hostedPath":"/beacon-a1b2c3.exe","downloadUrl":"http://10.10.10.5/beacon-a1b2c3.exe"}
+func (h *Handler) handleBeaconGenerate(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(contextKeyUserID).(string)
+
+	var body struct {
+		SessionID string `json:"sessionId"`
+		Listener  string `json:"listener"`
+		Format    string `json:"format"`
+		Arch      string `json:"arch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.SessionID == "" {
+		jsonError(w, "sessionId required", http.StatusBadRequest)
+		return
+	}
+
+	listener := body.Listener
+	if listener == "" {
+		listener = "http"
+	}
+	format := body.Format
+	if format == "" {
+		format = "exe"
+	}
+	arch := body.Arch
+	if arch == "" {
+		arch = "x64"
+	}
+
+	log.Printf("handleBeaconGenerate: sessionId=%q userID=%q", body.SessionID, userID)
+	sess, err := h.store.LoadSession(body.SessionID)
+	if err != nil {
+		log.Printf("handleBeaconGenerate: LoadSession error: %v", err)
+		jsonError(w, "session not found", http.StatusNotFound)
+		return
+	}
+	if sess.UserID != userID {
+		jsonError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Unmarshal state
+	var state schema.SessionState
+	if len(sess.State) > 0 {
+		if err := json.Unmarshal(sess.State, &state); err != nil {
+			log.Printf("handleBeaconGenerate: unmarshal error: %v", err)
+			jsonError(w, "corrupt session state", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Generate a 6-char hex build ID
+	id := fmt.Sprintf("%06x", time.Now().UnixNano()&0xffffff)
+	hostedPath := fmt.Sprintf("/beacon-%s.%s", id, format)
+	downloadURL := fmt.Sprintf("http://10.10.10.5%s", hostedPath)
+
+	state.Builds = append(state.Builds, schema.Build{
+		ID:         id,
+		Listener:   listener,
+		Format:     format,
+		Arch:       arch,
+		HostedPath: hostedPath,
+		CreatedAt:  time.Now(),
+	})
+
+	// Marshal state back
+	stateJSON, err := json.Marshal(state)
+	if err != nil {
+		jsonError(w, "failed to marshal state", http.StatusInternalServerError)
+		return
+	}
+	sess.State = stateJSON
+
+	if err := h.store.SaveSession(sess); err != nil {
+		log.Printf("handleBeaconGenerate: save session: %v", err)
+		jsonError(w, "failed to save session", http.StatusInternalServerError)
+		return
+	}
+
+	jsonOK(w, map[string]string{
+		"id":          id,
+		"hostedPath":  hostedPath,
+		"downloadUrl": downloadURL,
+	})
+}

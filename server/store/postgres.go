@@ -3,7 +3,6 @@ package store
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -115,18 +114,15 @@ func (s *Store) GetUserByUsername(username string) (UserRow, error) {
 
 // SaveSession upserts a session row keyed on id.
 func (s *Store) SaveSession(sess SessionRow) error {
-	stateJSON, err := json.Marshal(sess.State)
-	if err != nil {
-		return fmt.Errorf("store.SaveSession: marshal state: %w", err)
-	}
-	_, err = s.db.Exec(`
+	// sess.State is already marshalled JSON bytes — pass directly to avoid double-encoding.
+	_, err := s.db.Exec(`
 		INSERT INTO sessions (id, user_id, lab_id, state, started_at, last_active, completed)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (id) DO UPDATE SET
 			state       = EXCLUDED.state,
 			last_active = EXCLUDED.last_active,
 			completed   = EXCLUDED.completed
-	`, sess.ID, sess.UserID, sess.LabID, stateJSON, sess.StartedAt, sess.LastActive, sess.Completed)
+	`, sess.ID, sess.UserID, sess.LabID, sess.State, sess.StartedAt, sess.LastActive, sess.Completed)
 	if err != nil {
 		return fmt.Errorf("store.SaveSession: %w", err)
 	}
