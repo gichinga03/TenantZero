@@ -143,7 +143,7 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		// Re-read session state from DB before dispatch so REST API writes
 		// (e.g. BeaconGen builds) are visible to the engine.
 		{
-			fresh, err := h.store.LoadSession(sessRow.ID)
+			fresh, err := h.store.LoadLatestSession(userID)
 			if err == nil {
 				var freshState schema.SessionState
 				if jsonErr := json.Unmarshal(fresh.State, &freshState); jsonErr == nil {

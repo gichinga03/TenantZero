@@ -66,8 +66,8 @@ export default function AlloyNet({ token = '' }: AlloyNetProps) {
 
       {/* ── Tab content ─────────────────────────────────────── */}
       <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
-        {activeTab === 'operations' && <Operations token={token} onSessionId={setSessionId} />}
-        {activeTab === 'beacongen'  && <BeaconGen token={token} sessionId={sessionId} />}
+        <div style={{ display: activeTab === 'operations' ? 'contents' : 'none' }}><Operations token={token} onSessionId={setSessionId} /></div>
+        <div style={{ display: activeTab === 'beacongen'  ? 'contents' : 'none' }}><BeaconGen  token={token} sessionId={sessionId} /></div>
       </div>
     </div>
   </BeaconStoreProvider>

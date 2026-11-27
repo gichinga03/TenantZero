@@ -343,14 +343,12 @@ func (h *Handler) handleBeaconGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("handleBeaconGenerate: sessionId=%q userID=%q", body.SessionID, userID)
-	sess, err := h.store.LoadSession(body.SessionID)
+	// Always use the user's most recently active session so BeaconGen and
+	// beacon consoles (which open separate WS sessions) share the same state.
+	sess, err := h.store.LoadLatestSession(userID)
 	if err != nil {
-		log.Printf("handleBeaconGenerate: LoadSession error: %v", err)
+		log.Printf("handleBeaconGenerate: LoadLatestSession error: %v", err)
 		jsonError(w, "session not found", http.StatusNotFound)
-		return
-	}
-	if sess.UserID != userID {
-		jsonError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 

@@ -32,11 +32,14 @@ export function useBeaconSocket(token: string | null, labId: string): UseBeaconS
 
     let cancelled = false
     let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let sessionId: string | null = sessionStorage.getItem('tz_session_id')
 
     function connect() {
       if (cancelled) return
 
-      const url = `ws://localhost:8080/ws?token=${encodeURIComponent(token!)}&lab_id=${encodeURIComponent(labId)}`
+      const params = new URLSearchParams({ token: token!, lab_id: labId })
+      if (sessionId) params.set('session_id', sessionId)
+      const url = `ws://localhost:8080/ws?${params.toString()}`
       const ws  = new WebSocket(url)
       wsRef.current = ws
 
@@ -61,6 +64,14 @@ export function useBeaconSocket(token: string | null, labId: string): UseBeaconS
       }
 
       ws.onmessage = (ev: MessageEvent) => {
+        // Capture session ID from first session_init so reconnects reuse the same session
+        try {
+          const raw2 = JSON.parse(ev.data as string)
+          if (raw2?.event_type === 'session_init') {
+            const p = typeof raw2.payload === 'string' ? JSON.parse(raw2.payload) : raw2.payload
+            if (p?.sessionId) { sessionId = p.sessionId as string; sessionStorage.setItem('tz_session_id', sessionId) }
+          }
+        } catch { /* ignore */ }
         let raw: { type: string; payload?: unknown; event_type?: string; [key: string]: unknown } | null = null
         try { raw = JSON.parse(ev.data as string) } catch { return }
 

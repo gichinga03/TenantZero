@@ -148,6 +148,27 @@ func (s *Store) LoadSession(id string) (SessionRow, error) {
 	return sess, nil
 }
 
+// LoadLatestSession returns the most recently active incomplete session for a user.
+func (s *Store) LoadLatestSession(userID string) (SessionRow, error) {
+	var sess SessionRow
+	var stateJSON []byte
+	err := s.db.QueryRow(`
+		SELECT id, user_id, lab_id, state, started_at, last_active, completed
+		FROM sessions
+		WHERE user_id = $1 AND completed = false
+		ORDER BY last_active DESC
+		LIMIT 1
+	`, userID).Scan(
+		&sess.ID, &sess.UserID, &sess.LabID, &stateJSON,
+		&sess.StartedAt, &sess.LastActive, &sess.Completed,
+	)
+	if err != nil {
+		return SessionRow{}, fmt.Errorf("store.LoadLatestSession: %w", err)
+	}
+	sess.State = stateJSON
+	return sess, nil
+}
+
 // MarkComplete sets completed = true for the given session id.
 func (s *Store) MarkComplete(id string) error {
 	_, err := s.db.Exec(`UPDATE sessions SET completed = TRUE WHERE id = $1`, id)
